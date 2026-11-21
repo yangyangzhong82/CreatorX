@@ -9,14 +9,40 @@
     "language": "zh_CN",
 
     "command": {
-        // 为选区命令注册 /pos1、/wand 等短命令。
-        "shortCommands": true,
-        // 将已支持的 // 命令交给 /cx 处理。
-        "chatDoubleSlash": true
+        // 注册 /pos1、/set、/undo 等短命令。
+        "shortCommands": true
     },
     "limits": {
         // 单个长方体选区可包含的最大方块数（含两个角点）。
-        "maxSelectionVolume": 8000000
+        "maxSelectionVolume": 8000000,
+        // 单次操作最多改动的方块数，超过时拒绝执行。
+        "maxChangesPerOperation": 4000000,
+        // 预计改动超过此数时弹窗确认。
+        "confirmThreshold": 1000000,
+        // 禁止通过 CreatorX 放置的方块；粘贴时会跳过它们。
+        "disallowedBlocks": [
+            "minecraft:command_block",
+            "minecraft:chain_command_block",
+            "minecraft:repeating_command_block",
+            "minecraft:structure_block",
+            "minecraft:barrier"
+        ]
+    },
+    "performance": {
+        // 所有任务每 tick 合计最多写入的方块数。
+        "blocksPerTick": 20000,
+        // 所有任务每 tick 合计最多占用的毫秒数。
+        "tickBudgetMs": 15.0,
+        // 全服同时执行的任务上限，每位玩家同时只能有一个任务。
+        "maxConcurrentJobs": 4,
+        // 为 true 时写方块会通知邻居（沙子下落、水流、红石更新）。
+        "physics": false
+    },
+    "history": {
+        // 每位玩家保留的撤销记录条数。
+        "size": 30,
+        // 每位玩家撤销记录合计保留的方块数，超出时丢弃最早的记录。
+        "maxBlocksInMemory": 5000000
     },
     "selection": {
         // 视线设点的最远距离，单位为方块。
@@ -26,7 +52,9 @@
         // /cx wand 发放的物品，填写完整物品 ID。
         "item": "minecraft:wooden_axe",
         // 为 true 时，只有 /cx wand 发放的带标记物品可设点。
-        "requireTag": true
+        "requireTag": true,
+        // 为 true 时蹲下右键魔杖打开 CreatorX 主菜单（此时不设点 2）。
+        "sneakOpensMenu": true
     },
     "visual": {
         // auto 或 shapes 显示线框，particles 显示粒子，none 关闭显示。

@@ -10,7 +10,19 @@ CreatorX 是基于 LeviLamina 的基岩版快速建造模组。当前开发版�
 
 `/cx expand <格数> [反向格数] [方向]` 扩大选区，`/cx contract <格数> [反向格数] [方向]` 向指定方向收缩选区。方向可填 `north`、`south`、`east`、`west`、`up` 或 `down`，省略时取玩家视线方向。`/cx expand vert` 将选区延伸到当前维度的最低和最高可建造高度。
 
-选区默认上限为 8,000,000 个方块，可在 `config.jsonc` 的 `limits.maxSelectionVolume` 中调整。短命令（如 `/pos1`）由 `command.shortCommands` 控制，双斜杠入口由 `command.chatDoubleSlash` 控制。
+选区默认上限为 8,000,000 个方块，可在 `config.jsonc` 的 `limits.maxSelectionVolume` 中调整。短命令（如 `/pos1`）由 `command.shortCommands` 控制。
+
+## 客户端快捷键
+
+在游戏的「设置 → 键盘和鼠标」中可以修改 CreatorX 快捷键。联机时需要服务端也安装 CreatorX，并且玩家有执行 `/cx` 的权限。
+
+| 默认按键 | 操作 |
+| --- | --- |
+| F6 | 用准星指向的方块设置选区点 1 |
+| F7 | 用准星指向的方块设置选区点 2 |
+| F8 | 撤销上一步 |
+| F9 | 重做上一步 |
+| F10 | 打开 CreatorX 主菜单 |
 
 ## License
 

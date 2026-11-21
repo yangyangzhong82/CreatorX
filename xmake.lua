@@ -75,4 +75,10 @@ target("creatorx")
             os.cp(path.join(lang_src, "*"), lang_dst)
             print("Copied lang folder to " .. lang_dst)
         end
+
+        if is_config("target_type", "client") then
+            local resource_dst = path.join(output_dir, "resource_packs")
+            os.mkdir(resource_dst)
+            os.cp(path.join(os.projectdir(), "resource_packs", "*"), resource_dst)
+        end
     end)

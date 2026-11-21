@@ -11,7 +11,7 @@
 
 ### 1.1 目标
 
-1. 复刻 Java 版 WorldEdit 的核心体验：选区 → 操作 → 撤销，命令手感尽量一致（`//set`、`//copy`、`//paste` …）。
+1. 复刻 Java 版 WorldEdit 的核心体验：选区 → 操作 → 撤销，使用 `/cx set`、`/cx copy`、`/cx paste` 等命令。
 2. 针对基岩版做"便捷化"：表单 GUI、手机触屏友好、粘贴预览确认、进度提示、手持方块即图案。
 3. 大规模编辑不卡服：分 tick 预算执行，可取消，可撤销。
 4. 一套代码两个目标：
@@ -20,9 +20,9 @@
 
 ### 1.2 非目标（首版不做）
 
-- 地形重新生成（`//regen`）：没有可用的区块重新生成 API。
+- 地形重新生成（`/cx regen`）：没有可用的区块重新生成 API。
 - 脚本引擎（CraftScript）。
-- 与 Java 版 1:1 的表达式生成器（`//generate`）——放到 P3。
+- 与 Java 版 1:1 的表达式生成器（`/cx generate`）——放到 P3。
 
 ---
 
@@ -43,7 +43,7 @@
 
 ```
 ┌────────────────────────── 交互层 ──────────────────────────┐
-│ 命令(//xxx, /cx)  聊天拦截  表单GUI  物品工具(魔杖/笔刷)  快捷键(客户端) │
+│ 命令(/cx, /xxx)  表单GUI  物品工具(魔杖/笔刷)  快捷键(客户端)             │
 └──────────────┬─────────────────────────────────────────────┘
                │ 解析 → Pattern / Mask / Region / 参数
 ┌──────────────▼──────────── 会话层 ─────────────────────────┐
@@ -144,11 +144,11 @@ public:
     virtual bool     contract(std::span<Vec3i const> deltas) = 0;
     virtual void     shift(Vec3i d) = 0;
     virtual std::unique_ptr<Region> clone() const = 0;
-    virtual std::string describe() const = 0;          // //size 输出
+    virtual std::string describe() const = 0;          // /cx size 输出
 };
 ```
 
-实现：`CuboidRegion`、`ExtendingCuboid`（`//sel extend`）、`Polygon2DRegion`、`EllipsoidRegion`、`SphereRegion`、`CylinderRegion`、`ConvexPolyhedralRegion`（P3）。
+实现：`CuboidRegion`、`ExtendingCuboid`（`/cx sel extend`）、`Polygon2DRegion`、`EllipsoidRegion`、`SphereRegion`、`CylinderRegion`、`ConvexPolyhedralRegion`（P3）。
 
 选区由 `RegionSelector` 管理"点击 → 区域"的逻辑（左键设点 1、右键设点 2 / 追加多边形顶点）。选区绑定维度（`DimensionType`），跨维度时自动清空或提示。
 
@@ -187,7 +187,7 @@ public:
 | `#tag:xxx` | 方块标签（`Block::hasTag`） |
 | `a b` | 空格 = 交集 |
 
-全局掩码 `//gmask` 存在 `PlayerSession`，EditSession 写入前统一检查。
+全局掩码 `/cx gmask` 存在 `PlayerSession`，EditSession 写入前统一检查。
 
 ### 5.5 Clipboard 与 Transform
 
@@ -238,7 +238,7 @@ public:
 ```
 
 - **ChangeSet**：每个变更记录 `{pos, oldId, oldExtra, newId, newExtra, oldBENbt?}`，按区块分段存储，节省内存（坐标用区块内偏移 + 区块键）。
-- **History**：每个玩家一个环形栈，`//undo [n]`、`//redo [n]`。
+- **History**：每个玩家一个环形栈，`/cx undo [n]`、`/cx redo [n]`。
   - 限制：条数（`historySize`）+ 总方块数（`historyMaxBlocks`）。
   - 超出内存阈值时把旧 ChangeSet 序列化（NBT + 压缩）写到 `getDataDir()/history/<uuid>/`，撤销时读回。玩家退出后保留 `historyKeepMinutes` 分钟。
 - 撤销本身也是一个 EditJob（反向应用），同样分批，同样会被保护插件检查。
@@ -257,7 +257,7 @@ public:
 - 每个 tick 处理预算：`blocksPerTick`（默认 20000）或 `tickBudgetMs`（默认 15ms），任一到达即 `co_await ll::coro::yield;` 让出到下一轮。
 - 纯计算部分：`co_await task.via(ll::thread::ThreadPoolExecutor::getDefault())`，完成后自动回到服务端线程。
 - 每玩家同一时刻 1 个活动任务，全局最多 `maxConcurrentJobs` 个；多任务轮转公平分配预算。
-- `//cancel` 取消：已写入的部分记入 ChangeSet，可撤销。
+- `/cx cancel` 取消：已写入的部分记入 ChangeSet，可撤销。
 - 进度：每 20 tick 用动作栏（actionbar）推送 `已完成 45% (1.2M/2.7M) 预计 8s`。
 
 示意：
@@ -309,7 +309,6 @@ ll::coro::keepThis([job = std::move(job)]() -> ll::coro::CoroTask<> {
 
 1. **主命令** `/cx <子命令> ...`：始终可用，用 `CommandRegistrar::getServerInstance().getOrCreateCommand("cx", ...)` + 多个 `overload<Params>().text("set").required("pattern")…` 注册，补全友好。
 2. **短命令**：`/pos1`、`/pos2`、`/wand`、`/undo`、`/redo`、`/copy`、`/paste`… 单独注册（`CommandHandle::alias` 可加别名）。与原版冲突的（`/fill`、`/clone`）不注册短命令。配置 `shortCommands` 可整体关闭。
-3. **Java 风格 `//set stone`**（Spike S3）：玩家在聊天框输入 `//set stone` 时，客户端会当作命令发出，命令名是 `/set`，原版会报"未知命令"。方案是监听 `ll::event::ExecutingCommandEvent`（`ll/api/event/command/ExecuteCommandEvent.h`，可取消，有 `commandContext()`），发现命令串以 `//` 开头就取消原执行，交给 CreatorX 自己的分发器。若该事件拿不到原始串，则退回到 Hook 命令请求包处理。
 
 #### 参数类型
 
@@ -337,14 +336,14 @@ ll::coro::keepThis([job = std::move(job)]() -> ll::coro::CoroTask<> {
   - 判断手持物：`Player::getSelectedItem().getTypeName()`；魔杖带自定义名/lore（`ItemStackBase::setCustomName`/`setCustomLore`），用 `mUserData` 里的标记区分"真魔杖"和普通斧头（配置 `wandRequireTag`）。
   - 创造模式左键是瞬间破坏，事件仍会触发；生存模式下按住破坏也只在开始时处理一次（去抖 200ms）。
 - **远程魔杖**（指南针）：`Actor::traceRay(float tMax, bool includeActor, bool includeBlock, ...)`（LLNDAPI）取远处方块；左键空气无事件，用 `PlayerSwingEvent`（无坐标）+ `traceRay` 补位，右键用 `PlayerUseItemEvent`。
-- **笔刷**：`//brush sphere stone 4` 把笔刷绑定到当前手持物品类型；右键空气/方块时 `traceRay(range)` 找落点，执行一次 EditSession（可撤销）。
+- **笔刷**：`/cx brush sphere stone 4` 把笔刷绑定到当前手持物品类型；右键空气/方块时 `traceRay(range)` 找落点，执行一次 EditSession（可撤销）。
 - **信息工具**：右键显示方块名、状态、runtimeId、方块实体 NBT（`Tag::toSnbt`）。
 
 ### 7.3 表单 GUI（便捷化重点）
 
 使用 `ll::form::SimpleForm` / `CustomForm` / `ModalForm`（`ll/api/form/`），新版数据驱动 UI `ll::ui::CustomForm` 可作为后续升级。
 
-- `//menu`（或蹲下 + 右键魔杖）打开主菜单：选区 / 填充 / 替换 / 形状 / 剪贴板 / 历史 / 原理图 / 笔刷 / 设置。
+- `/cx menu`（或蹲下 + 右键魔杖）打开主菜单：选区 / 填充 / 替换 / 形状 / 剪贴板 / 历史 / 原理图 / 笔刷 / 设置。
 - 每个操作页都是 `CustomForm`：
   - 方块输入框默认填手持方块；下拉框列出最近使用的 10 个图案（存 PlayerSession）。
   - 形状页：类型下拉、半径滑条（`appendSlider`，上限 = 玩家 `EditLimit`）、空心开关、中心点（脚下 / 视线 / 点 1）。
@@ -379,17 +378,17 @@ ll::coro::keepThis([job = std::move(job)]() -> ll::coro::CoroTask<> {
 
 ### 8.2 快捷键
 
-`ll::input::KeyRegistry::getInstance().getOrCreateKey(name, defaultKeyCodes, allowRemap)`（`src-client/ll/api/input/KeyRegistry.h`），会出现在原版"控制"设置里可重映射。
+客户端通过 `ll::input::KeyRegistry` 注册 Windows 虚拟键码。玩家可在「设置 → 键盘和鼠标」中改键。
 
 | 名称 | 默认键 | 动作 |
 | --- | --- | --- |
-| `pos1` / `pos2` | 待定 | 以准星方块设点 |
-| `undo` / `redo` | Ctrl+Z / Ctrl+Y（组合键用 `KeyInputEvent` 自行判断） | 撤销 / 重做 |
-| `menu` | 待定 | 打开主菜单 |
-| `paste_preview` | 待定 | 切换粘贴预览 |
-| `nudge_*` | 方向键 | 微调选区/预览位置 |
+| `hpos1` / `hpos2` | F6 / F7 | 以准星方块设点 |
+| `undo` / `redo` | F8 / F9 | 撤销 / 重做 |
+| `menu` | F10 | 打开主菜单 |
+| `paste_preview`（规划） | 待定 | 切换粘贴预览 |
+| `nudge_*`（规划） | 方向键 | 微调选区/预览位置 |
 
-准星目标：`ClientInstance::getLatestHitResult()`（virtual）；超远距离用 `Actor::traceRay`。键码约定（推测是 Windows VK）需 S8 确认。
+这五项操作通过游戏的命令请求发送对应的 `/cx` 子命令，由服务端校验权限并执行。准星设点沿用 `/cx hpos1` 和 `/cx hpos2` 的服务端射线检测。
 
 ### 8.3 HUD
 
@@ -408,7 +407,7 @@ ll::coro::keepThis([job = std::move(job)]() -> ll::coro::CoroTask<> {
 | `CxClipboardSync` | S→C | 剪贴板尺寸、原点（不发方块数据） |
 | `CxPreviewSync` | S→C | 预览框位置、旋转 |
 | `CxJobProgress` | S→C | 任务 id、百分比、剩余时间 |
-| `CxAction` | C→S | 快捷键动作（pos1 at x,y,z / undo / redo / menu …），服务端仍做权限校验 |
+| `CxAction` | C→S | 预览位置微调等后续客户端动作，服务端校验权限 |
 
 客户端发来的坐标只当"建议"，服务端校验距离（≤ `maxRemoteSelectDistance`）与权限。
 
@@ -424,7 +423,7 @@ ll::coro::keepThis([job = std::move(job)]() -> ll::coro::CoroTask<> {
 
 - 存储：`getDataDir()/schematics/`，可配置每玩家子目录、公共目录。
 - 文件读写和压缩在线程池里跑。
-- `//schem list` 支持分页、搜索；名称写入 SoftEnum 供补全。
+- `/cx schem list` 支持分页、搜索；名称写入 SoftEnum 供补全。
 - 安全：文件名只允许 `[A-Za-z0-9_\-一-龥]`，禁止路径穿越；加载前校验体积上限。
 
 ---
@@ -439,14 +438,13 @@ ll::coro::keepThis([job = std::move(job)]() -> ll::coro::CoroTask<> {
   "logLevel": "Info",
   "language": "zh_CN",
   "command": {
-    "shortCommands": true,          // 注册 /pos1 /undo 等短命令
-    "chatDoubleSlash": true,        // 拦截 //set 这种 Java 风格输入
+    "shortCommands": true           // 注册 /pos1 /undo 等短命令
     "defaultPermission": "GameDirectors"
   },
   "wand": {
     "item": "minecraft:wooden_axe",
     "navItem": "minecraft:compass",
-    "requireTag": false              // 只有 //wand 发的魔杖才生效
+    "requireTag": false              // 只有 /cx wand 发的魔杖才生效
   },
   "limits": {
     "maxSelectionVolume": 8000000,
@@ -493,7 +491,7 @@ ll::coro::keepThis([job = std::move(job)]() -> ll::coro::CoroTask<> {
 | 玩家偏好（魔杖、笔刷绑定、最近图案、gmask） | `getDataDir()/players.db` | `ll::data::KeyValueDB`，键 `uuid` → JSON |
 | 原理图 | `getDataDir()/schematics/` | 文件 |
 | 历史溢写 | `getDataDir()/history/<uuid>/` | 压缩 NBT，启动时清理过期 |
-| 剪贴板 | 内存；可选 `//clipboard save` 落盘 | `.cxs` |
+| 剪贴板 | 内存；可选 `/cx clipboard save` 落盘 | `.cxs` |
 
 ---
 
@@ -537,16 +535,18 @@ ll::coro::keepThis([job = std::move(job)]() -> ll::coro::CoroTask<> {
 | --- | --- | --- | --- |
 | S1 | `setBlock` 的 `updateFlags` 各位含义；`BlockChangeContext{}` 是否可用 | 在测试世界分别用 0/1/2/3/… 写方块，观察邻居更新、客户端可见性 | 只用经过验证的组合 |
 | S2 | 原版客户端是否渲染 `PrimitiveShapesPacket` 的 Box/Line | 服务端发包给原版客户端 | 粒子线框 |
-| S3 | `ExecutingCommandEvent` 能否拿到 `//set stone` 原始串并取消 | 监听并打印 `commandContext()` | Hook `ServerNetworkHandler::$handle(CommandRequestPacket)`；再不行只支持 `/cx` |
 | S4 | 方块状态旋转是否有内建路径 | 查 `BlockType`/结构放置相关 MCAPI | 自建 `state_rotation.json` |
 | S5 | 未加载区块写入：`tickingarea` 命令 / `getOrLoadChunk` | 远处填充后重进世界检查是否保存 | 拒绝并提示玩家靠近 |
 | S6 | `LevelChunk::setBlockSimple` 快速路径的同步/存盘/光照 | 写入后重连、重启服务器检查 | 只用标准路径 |
 | S7 | 客户端线框：Hook 点、材质、LineList | 画一个固定盒子 | TriangleList 细条；或退回服务端可视化 |
 | S8 | `KeyRegistry` 键码约定 | 注册几个键看设置界面显示 | `KeyInputEvent` 原始键码 |
-| S9 | 单人模式下表单回调（内置服务端 + 本地玩家） | 单人世界打开 `//menu` | 单人模式只用命令 |
+| S9 | 单人模式下表单回调（内置服务端 + 本地玩家） | 单人世界打开 `/cx menu` | 单人模式只用命令 |
 | S10 | `ItemStackBase::setCustomName` 的 `RedactableString` 构造 | 发魔杖 | 不设名字，只用 `mUserData` 标记 |
 
-S3 源码核对（26.60.8）：`ExecutingCommandEvent` 在 `MinecraftCommands::executeCommand` 调用原函数前发布，提供可写的 `CommandContext::mCommand`。当前实现仅将已注册的双斜杠选区命令改写为 `/cx` 子命令，沿用原执行者、权限与输出。BDS 和单人世界收到的实际前缀仍待进游戏确认。
+
+S1 当前实现（v0.1，待实测）：`BlockChangeContext{}` 可直接构造（`TypedStorage` 默认构造各成员，variant 为 `monostate`）；`updateFlags` 取 `physics ? 3 : 2`，即 1 = 通知邻居、2 = 同步客户端，集中在 `src/edit/ChangeSet.cpp` 的 `updateFlags()`。实测不符时只改这一处。
+
+S5 当前实现（v0.1）：按 `deny` 处理。提交前用 `BlockSource::areChunksFullyLoaded(min, max)` 检查目标区域；执行中每进入一个新区块用 `hasChunksAt(pos, 0, false)` 复查，未加载即中止，已写入部分可撤销。
 
 ---
 
@@ -554,7 +554,7 @@ S3 源码核对（26.60.8）：`ExecutingCommandEvent` 在 `MinecraftCommands::e
 
 | 版本 | 内容 | 验收标准 |
 | --- | --- | --- |
-| **M0 Spike** | S1–S10 | 每项有结论写回本文档 |
+| **M0 Spike** | S1、S2、S4–S10 | 每项有结论写回本文档 |
 | **v0.1 MVP** | 模板重命名；魔杖/pos1/pos2；立方体选区；`set`/`replace`/`walls`/`outline`；undo/redo；copy/cut/paste（无旋转）；分 tick 执行与取消；限额；粒子可视化；中英文 | 100³ 填充不掉 TPS 到 15 以下，撤销完全复原 |
 | **v0.2** | 完整 Pattern/Mask；形状生成（球、柱、金字塔）；rotate/flip（含状态旋转）；stack/move；`.mcstructure`/`.cxs` 原理图；表单主菜单；gmask | FEATURES.md 中 P0+P1 的选区/区域/剪贴板项全部完成 |
 | **v0.3** | 笔刷与工具；导航命令；实用命令；多边形/椭球/圆柱选区；PrimitiveShapes 可视化；粘贴/形状假方块预览 | 手机端可只用表单完成"选区-填充-撤销-粘贴" |
@@ -588,7 +588,6 @@ S3 源码核对（26.60.8）：`ExecutingCommandEvent` 在 `MinecraftCommands::e
 | 使用物品 | `ll::event::PlayerUseItemEvent` | `ll/api/event/player/PlayerUseItemEvent.h` |
 | 挥手 | `ll::event::PlayerSwingEvent` | `ll/api/event/player/PlayerSwingEvent.h` |
 | 进出服 | `PlayerJoinEvent` / `PlayerDisconnectEvent` | `ll/api/event/player/` |
-| 命令拦截 | `ll::event::ExecutingCommandEvent` | `ll/api/event/command/ExecuteCommandEvent.h` |
 | 服务端线程 | `ll::thread::ServerThreadExecutor::getDefault()` | `ll/api/thread/ServerThreadExecutor.h` |
 | 线程池 | `ll::thread::ThreadPoolExecutor::getDefault()` | `ll/api/thread/ThreadPoolExecutor.h` |
 | 协程 | `ll::coro::CoroTask`、`keepThis`、`yield`、`co_await 1_tick` | `ll/api/coro/` |

@@ -1,0 +1,17 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "CreatorX Shortcut Labels",
+    "description": "Localized shortcut names for the keyboard and mouse settings",
+    "uuid": "18120fde-71a5-433e-bf97-c10e70a10f27",
+    "version": [1, 0, 0],
+    "min_engine_version": [1, 21, 0]
+  },
+  "modules": [
+    {
+      "type": "resources",
+      "uuid": "7924bcd2-8278-4663-a5bc-d2113b33cf99",
+      "version": [1, 0, 0]
+    }
+  ]
+}

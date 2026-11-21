@@ -2,7 +2,11 @@
 
 #include "Config/ConfigManager.h"
 #include "I18n/I18n.h"
+#include "command/EditCommands.h"
 #include "command/SelectionCommands.h"
+#include "exec/JobScheduler.h"
+#include "input/Shortcuts.h"
+#include "session/PlayerSession.h"
 #include "ll/api/mod/RegisterHelper.h"
 #include <filesystem>
 
@@ -41,20 +45,31 @@ bool Entry::load() {
     }
     I18n::getInstance().setLanguage(config.language);
 
+#ifdef LL_PLAT_C
+    // 原版初始化键盘布局时会读取已注册的快捷键。
+    registerShortcuts();
+#endif
     logger.info(tr("mod.loaded"));
     return true;
 }
 
 bool Entry::enable() {
     getSelf().getLogger().debug("Enabling...");
+    enableSessions();
+    exec::enableScheduler();
     enableSelectionCommands();
+    enableEditCommands();
     logger.info(tr("mod.enabled"));
     return true;
 }
 
 bool Entry::disable() {
     getSelf().getLogger().debug("Disabling...");
+    disableEditCommands();
     disableSelectionCommands();
+    // 先结束任务（会把已完成的改动写入历史），再丢弃会话。
+    exec::disableScheduler();
+    disableSessions();
     logger.info(tr("mod.unloaded"));
     return true;
 }

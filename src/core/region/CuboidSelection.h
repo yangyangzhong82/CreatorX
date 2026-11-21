@@ -1,17 +1,14 @@
 #pragma once
 
+#include "core/math/Vec3i.h"
+#include "core/region/Box.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <optional>
 
 namespace creatorx::core {
-
-struct Vec3i {
-    int x, y, z;
-
-    bool operator==(Vec3i const&) const = default;
-};
 
 enum class Direction { me, north, south, east, west, up, down };
 
@@ -32,6 +29,11 @@ struct CuboidSelection {
             return static_cast<std::int64_t>(std::max(a, b)) - std::min(a, b) + 1;
         };
         return CuboidSize{extent(first->x, second->x), extent(first->y, second->y), extent(first->z, second->z)};
+    }
+
+    std::optional<Box> box() const {
+        if (!first || !second) return std::nullopt;
+        return Box::of(*first, *second);
     }
 
     bool resize(Direction direction, int amount, int reverseAmount, bool contract) {
