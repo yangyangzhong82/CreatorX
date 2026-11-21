@@ -9,7 +9,7 @@
     "language": "zh_CN",
 
     "command": {
-        // 注册 /pos1、/pos2、/size 和 /desel 短命令。
+        // 为选区命令注册 /pos1、/wand 等短命令。
         "shortCommands": true,
         // 将已支持的 // 命令交给 /cx 处理。
         "chatDoubleSlash": true
@@ -17,5 +17,21 @@
     "limits": {
         // 单个长方体选区可包含的最大方块数（含两个角点）。
         "maxSelectionVolume": 8000000
+    },
+    "selection": {
+        // 视线设点的最远距离，单位为方块。
+        "traceDistance": 128.0
+    },
+    "wand": {
+        // /cx wand 发放的物品，填写完整物品 ID。
+        "item": "minecraft:wooden_axe",
+        // 为 true 时，只有 /cx wand 发放的带标记物品可设点。
+        "requireTag": true
+    },
+    "visual": {
+        // auto 或 shapes 显示线框，particles 显示粒子，none 关闭显示。
+        "mode": "auto",
+        "maxDistance": 128.0,
+        "particle": "minecraft:villager_happy"
     }
 }
