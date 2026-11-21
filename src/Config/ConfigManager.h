@@ -5,7 +5,7 @@
 #include <memory>
 
 
-namespace my_mod {
+namespace creatorx {
 
 class ConfigManager {
 public:
@@ -28,4 +28,4 @@ private:
     std::filesystem::path   mConfigPath;
 };
 
-} // namespace my_mod
+} // namespace creatorx

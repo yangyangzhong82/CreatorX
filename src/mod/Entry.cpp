@@ -2,10 +2,11 @@
 
 #include "Config/ConfigManager.h"
 #include "I18n/I18n.h"
+#include "command/SelectionCommands.h"
 #include "ll/api/mod/RegisterHelper.h"
 #include <filesystem>
 
-namespace my_mod {
+namespace creatorx {
 ll::io::Logger& logger = Entry::getInstance().getSelf().getLogger();
 Config&         config = ConfigManager::getInstance().get();
 
@@ -46,13 +47,14 @@ bool Entry::load() {
 
 bool Entry::enable() {
     getSelf().getLogger().debug("Enabling...");
-
+    enableSelectionCommands();
     logger.info(tr("mod.enabled"));
     return true;
 }
 
 bool Entry::disable() {
     getSelf().getLogger().debug("Disabling...");
+    disableSelectionCommands();
     logger.info(tr("mod.unloaded"));
     return true;
 }
@@ -62,5 +64,5 @@ bool Entry::unload() {
     return true;
 }
 
-LL_REGISTER_MOD(my_mod::Entry, my_mod::Entry::getInstance());
-} // namespace my_mod
+LL_REGISTER_MOD(creatorx::Entry, creatorx::Entry::getInstance());
+} // namespace creatorx

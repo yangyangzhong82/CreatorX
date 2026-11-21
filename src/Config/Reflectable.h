@@ -2,9 +2,9 @@
 
 #include <type_traits>
 
-namespace my_mod {
+namespace creatorx {
 
 template <typename T>
 struct is_reflectable : std::false_type {};
 
-} // namespace my_mod
+} // namespace creatorx

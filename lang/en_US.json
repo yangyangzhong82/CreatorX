@@ -1,4 +1,13 @@
 {
+    "command.selection": "CreatorX cuboid selection",
+    "command.player_only": "Run this command as a player in the world.",
+    "command.no_permission": "You do not have permission to use CreatorX selection commands.",
+    "selection.corner": "Set point {} to ({}, {}, {}).",
+    "selection.too_large": "This selection exceeds the limit of {} blocks. Move the points closer together.",
+    "selection.none_here": "No selection in this dimension. Use /cx pos1 and /cx pos2 to set the corners.",
+    "selection.missing_corner": "Point {} is missing. Set the other corner first.",
+    "selection.size": "Point 1 ({}, {}, {}), point 2 ({}, {}, {}). Size {} × {} × {}, {} blocks total.",
+    "selection.cleared": "Selection cleared.",
     "mod.loaded": "Mod loaded",
     "mod.enabled": "Mod enabled",
     "mod.unloaded": "Mod unloaded",

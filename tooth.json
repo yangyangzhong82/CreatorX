@@ -1,13 +1,12 @@
 {
   "format_version": 3,
   "format_uuid": "289f771f-2c9a-4d73-9f3f-8492495a924d",
-  "tooth": "github.com/LiteLDev/levilamina-mod-template",
+  "tooth": "github.com/yangyangzhong82/CreatorX",
   "version": "0.0.0",
   "info": {
-    "name": "My Mod",
-    "description": "Description of my mod",
-    "tags": ["platform:levilamina", "type:mod"],
-    "avatar_url": "https://example.com/my-mod/avatar.png"
+    "name": "CreatorX",
+    "description": "WorldEdit-style building tools for Minecraft Bedrock Edition",
+    "tags": ["platform:levilamina", "type:mod"]
   },
   "variants": [
     {
@@ -20,13 +19,13 @@
         {
           "type": "zip",
           "urls": [
-            "https://{{tooth}}/releases/download/v{{version}}/levilamina-mod-template-server-windows-x64.zip"
+            "https://{{tooth}}/releases/download/v{{version}}/CreatorX-server-windows-x64.zip"
           ],
           "placements": [
             {
               "type": "dir",
-              "src": "my-mod/",
-              "dest": "mods/my-mod/"
+              "src": "creatorx/",
+              "dest": "mods/creatorx/"
             }
           ]
         }
@@ -54,13 +53,13 @@
         {
           "type": "zip",
           "urls": [
-            "https://{{tooth}}/releases/download/v{{version}}/levilamina-mod-template-client-windows-x64.zip"
+            "https://{{tooth}}/releases/download/v{{version}}/CreatorX-client-windows-x64.zip"
           ],
           "placements": [
             {
               "type": "dir",
-              "src": "my-mod/",
-              "dest": "mods/my-mod/"
+              "src": "creatorx/",
+              "dest": "mods/creatorx/"
             }
           ]
         }
