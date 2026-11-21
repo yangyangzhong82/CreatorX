@@ -19,9 +19,11 @@ struct Budget {
     std::uint64_t                         units;
     std::chrono::steady_clock::time_point deadline;
 
-    bool exhausted(std::uint64_t used) const {
-        return used >= units || ((used & 255) == 0 && std::chrono::steady_clock::now() >= deadline);
+    bool exhausted(std::uint64_t used, std::uint64_t scanned) const {
+        return used >= units || ((scanned & 255) == 0 && std::chrono::steady_clock::now() >= deadline);
     }
+
+    bool exhausted(std::uint64_t used) const { return exhausted(used, used); }
 };
 
 enum class JobState { running, done, failed };

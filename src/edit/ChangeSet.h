@@ -68,7 +68,8 @@ bool writeBlock(
     Block const&       block,
     Block const&       extra,
     CompoundTag const* entity,
-    ChangeSet*         changes
+    ChangeSet*         changes,
+    Block const*       knownOldBlock = nullptr
 );
 
 // 每个玩家的撤销 / 重做栈。

@@ -7,10 +7,13 @@
 #include "mc/world/item/SaveContext.h"
 #include "mc/world/level/BlockPos.h"
 #include "mc/world/level/BlockSource.h"
+#include "mc/world/level/ChunkPos.h"
+#include "mc/world/level/Level.h"
 #include "mc/world/level/block/Block.h"
 #include "mc/world/level/block/BlockType.h"
 #include "mc/world/level/block/actor/BlockActor.h"
 #include "mc/world/level/block/actor/BlockActorType.h"
+#include "mc/world/level/chunk/ChunkViewSource.h"
 
 #include <chrono>
 #include <random>
@@ -27,22 +30,57 @@ void tell(Player* player, std::string const& message) {
     if (player) player->sendMessage(message);
 }
 
-// 每进入一个新区块检查一次是否已加载；任务中途区块被卸载时中止。
-class ChunkWatch {
+// 每个任务只持有当前需要临时加载的区块视图，离开区块或结束任务时释放。
+class ChunkAccess {
 public:
-    bool ready(BlockSource& region, core::Vec3i p) {
-        std::pair key{p.x >> 4, p.z >> 4};
-        if (mLast == key) return true;
-        if (!region.hasChunksAt(BlockPos{p.x, p.y, p.z}, 0, false)) return false;
-        mLast = key;
-        return true;
+    enum class State { ready, loading, failed };
+
+    void beginTick() { mReady.reset(); }
+
+    State prepare(Level& level, BlockSource& region, mce::UUID const& owner, core::Vec3i p) {
+        auto chunk = ChunkPos(BlockPos{p.x, p.y, p.z});
+        if (mReady == chunk) return State::ready;
+        if (mRequested != chunk) {
+            mView.reset();
+            mRequested.reset();
+        }
+
+        auto& source = region.getChunkSource();
+        if (source.getAvailableChunk(chunk)) {
+            mReady = chunk;
+            return State::ready;
+        }
+        if (mView) return Clock::now() < mDeadline ? State::loading : State::failed;
+        if (!source.isWithinWorldLimit(chunk)) return State::failed;
+
+        auto* player = level.getPlayer(owner);
+        if (!player) return State::failed;
+        mView = player->$_createChunkSource(source);
+        if (!mView) return State::failed;
+
+        auto x = chunk.x * 16;
+        auto z = chunk.z * 16;
+        mView->move(
+            BlockPos{x, p.y, z},
+            BlockPos{x + 15, p.y, z + 15},
+            false,
+            ChunkSourceViewGenerateMode::GenerateAll,
+            [](auto) {},
+            nullptr
+        );
+        mRequested = chunk;
+        mDeadline  = Clock::now() + std::chrono::seconds(30);
+        return State::loading;
     }
 
 private:
-    std::optional<std::pair<int, int>> mLast;
+    std::optional<ChunkPos>          mReady;
+    std::optional<ChunkPos>          mRequested;
+    std::shared_ptr<ChunkViewSource> mView;
+    Clock::time_point                mDeadline{};
 };
 
-std::string chunkError(core::Vec3i p) { return tr("job.chunk_unloaded", p.x >> 4, p.z >> 4); }
+std::string chunkError(core::Vec3i p) { return tr("job.chunk_load_failed", p.x >> 4, p.z >> 4); }
 
 // 把本次改动记入玩家历史并汇报结果。
 void finishEdit(
@@ -81,14 +119,13 @@ public:
     )
     : mOwner(owner),
       mDimension(dimension),
-      mBox(box),
-      mShape(shape),
+      mTotal(core::shapeVolume(box, shape)),
       mPattern(std::move(pattern)),
       mMask(std::move(mask)),
-      mIterator(box),
+      mIterator(box, shape),
       mChanges(dimension) {}
 
-    std::uint64_t total() const override { return mBox.volume(); }
+    std::uint64_t total() const override { return mTotal; }
     std::uint64_t progress() const override { return mVisited; }
 
     exec::JobState run(Level& level, exec::Budget const& budget) override {
@@ -97,23 +134,25 @@ public:
             mError = tr("job.no_dimension");
             return exec::JobState::failed;
         }
-        std::uint64_t used = 0, skipped = 0;
-        core::Vec3i   p;
+        std::uint64_t used = 0;
+        mChunks.beginTick();
         while (!budget.exhausted(used)) {
-            if (!mIterator.next(p)) return exec::JobState::done;
-            ++mVisited;
-            if (!core::inShape(mBox, p, mShape)) {
-                // 跳过的内部方块也要计入一点预算，避免一个 tick 遍历过多。
-                if ((++skipped & 63) == 0) ++used;
-                continue;
-            }
-            ++used;
-            if (!mChunks.ready(*region, p)) {
+            auto* current = mIterator.current();
+            if (!current) return exec::JobState::done;
+            auto p = *current;
+            auto state = mChunks.prepare(level, *region, mOwner, p);
+            if (state == ChunkAccess::State::loading) return exec::JobState::running;
+            if (state == ChunkAccess::State::failed) {
                 mError = chunkError(p);
                 return exec::JobState::failed;
             }
-            if (mMask && !mMask->test(region->getBlock(BlockPos{p.x, p.y, p.z}))) continue;
-            if (writeBlock(*region, p, mPattern.apply(mRandom), airBlock(), nullptr, &mChanges)) ++mChanged;
+            auto const& oldBlock = region->getBlock(BlockPos{p.x, p.y, p.z});
+            if (!mMask || mMask->test(oldBlock)) {
+                if (writeBlock(*region, p, mPattern.apply(mRandom), airBlock(), nullptr, &mChanges, &oldBlock)) ++mChanged;
+            }
+            mIterator.advance();
+            ++mVisited;
+            ++used;
         }
         return exec::JobState::running;
     }
@@ -125,12 +164,11 @@ public:
 private:
     mce::UUID           mOwner;
     int                 mDimension;
-    core::Box           mBox;
-    core::BoxShape      mShape;
+    std::uint64_t       mTotal;
     Pattern             mPattern;
     std::optional<Mask> mMask;
     core::BoxIterator   mIterator;
-    ChunkWatch          mChunks;
+    ChunkAccess         mChunks;
     ChangeSet           mChanges;
     std::mt19937        mRandom{std::random_device{}()};
     std::uint64_t       mVisited = 0, mChanged = 0;
@@ -149,8 +187,6 @@ public:
         mClipboard->size   = box.size();
         mClipboard->offset = offset;
         mClipboard->origin = box.min;
-        mClipboard->blocks.resize(box.volume());
-        mClipboard->extras.resize(box.volume());
     }
 
     std::uint64_t total() const override { return mBox.volume(); }
@@ -164,19 +200,23 @@ public:
         }
         // 读取比写入便宜得多，每 4 个方块计 1 份预算。
         std::uint64_t used = 0;
-        core::Vec3i   p;
+        mChunks.beginTick();
         while (!budget.exhausted(used)) {
-            if (!mIterator.next(p)) return exec::JobState::done;
-            if ((++mRead & 3) == 0) ++used;
-            if (!mChunks.ready(*region, p)) {
+            auto* current = mIterator.current();
+            if (!current) return exec::JobState::done;
+            auto p     = *current;
+            auto state = mChunks.prepare(level, *region, mOwner, p);
+            if (state == ChunkAccess::State::loading) return exec::JobState::running;
+            if (state == ChunkAccess::State::failed) {
                 mError = chunkError(p);
                 return exec::JobState::failed;
             }
+            mIterator.advance();
+            if ((++mRead & 3) == 0) ++used;
             BlockPos    pos{p.x, p.y, p.z};
             auto        index        = mClipboard->index(p - mBox.min);
             auto const& block        = region->getBlock(pos);
-            mClipboard->blocks[index] = &block;
-            mClipboard->extras[index] = &region->getExtraBlock(pos);
+            mClipboard->store(index, {&block, &region->getExtraBlock(pos)});
             if (block.getBlockType().mBlockEntityType == BlockActorType::Undefined) continue;
             if (auto* actor = region->getBlockEntity(pos)) {
                 CompoundTag tag;
@@ -207,7 +247,7 @@ private:
     int                        mDimension;
     core::Box                  mBox;
     core::BoxIterator          mIterator;
-    ChunkWatch                 mChunks;
+    ChunkAccess                mChunks;
     std::optional<Pattern>     mCutPattern;
     std::shared_ptr<Clipboard> mClipboard;
     std::uint64_t              mRead      = 0;
@@ -235,26 +275,32 @@ public:
             return exec::JobState::failed;
         }
         std::uint64_t used = 0;
-        core::Vec3i   p;
-        while (!budget.exhausted(used)) {
-            if (!mIterator.next(p)) return exec::JobState::done;
-            ++mVisited;
+        auto const    startVisited = mVisited;
+        mChunks.beginTick();
+        while (!budget.exhausted(used, mVisited - startVisited)) {
+            auto* current = mIterator.current();
+            if (!current) return exec::JobState::done;
+            auto  p     = *current;
             auto  index = mClipboard->index(p - mBox.min);
-            auto* block = mClipboard->blocks[index];
-            if (!block || (mSkipAir && block->isAir())) continue;
-            ++used;
-            if (isDisallowed(*block)) {
-                ++mDenied;
-                continue;
+            auto [block, extra] = mClipboard->at(index);
+            if (block && (!mSkipAir || !block->isAir())) {
+                ++used;
+                if (isDisallowed(*block)) {
+                    ++mDenied;
+                } else {
+                    auto state = mChunks.prepare(level, *region, mOwner, p);
+                    if (state == ChunkAccess::State::loading) return exec::JobState::running;
+                    if (state == ChunkAccess::State::failed) {
+                        mError = chunkError(p);
+                        return exec::JobState::failed;
+                    }
+                    auto               entity = mClipboard->entities.find(index);
+                    CompoundTag const* tag    = entity == mClipboard->entities.end() ? nullptr : &entity->second;
+                    if (writeBlock(*region, p, *block, extra ? *extra : airBlock(), tag, &mChanges)) ++mChanged;
+                }
             }
-            if (!mChunks.ready(*region, p)) {
-                mError = chunkError(p);
-                return exec::JobState::failed;
-            }
-            auto               entity = mClipboard->entities.find(index);
-            CompoundTag const* tag    = entity == mClipboard->entities.end() ? nullptr : &entity->second;
-            auto*              extra  = mClipboard->extras[index];
-            if (writeBlock(*region, p, *block, extra ? *extra : airBlock(), tag, &mChanges)) ++mChanged;
+            mIterator.advance();
+            ++mVisited;
         }
         return exec::JobState::running;
     }
@@ -271,7 +317,7 @@ private:
     core::Box                        mBox;
     bool                             mSkipAir;
     core::BoxIterator                mIterator;
-    ChunkWatch                       mChunks;
+    ChunkAccess                      mChunks;
     ChangeSet                        mChanges;
     std::uint64_t                    mVisited = 0, mChanged = 0, mDenied = 0;
     Clock::time_point                mStart   = Clock::now();
@@ -291,6 +337,7 @@ public:
 
     exec::JobState run(Level& level, exec::Budget const& budget) override {
         std::uint64_t used = 0;
+        mChunks.beginTick();
         while (!budget.exhausted(used)) {
             if (mSet >= mSets.size()) return exec::JobState::done;
             auto& changes = mSets[mSet];
@@ -308,7 +355,9 @@ public:
             // 撤销从后往前写回旧值，重做从前往后写回新值。
             auto index = mUndo ? changes.size() - 1 - mApplied : mApplied;
             auto p     = changes.position(index);
-            if (!mChunks.ready(*region, p)) {
+            auto state = mChunks.prepare(level, *region, mOwner, p);
+            if (state == ChunkAccess::State::loading) return exec::JobState::running;
+            if (state == ChunkAccess::State::failed) {
                 mError = chunkError(p);
                 return exec::JobState::failed;
             }
@@ -363,7 +412,7 @@ private:
     mce::UUID              mOwner;
     bool                   mUndo;
     std::vector<ChangeSet> mSets;
-    ChunkWatch             mChunks;
+    ChunkAccess            mChunks;
     std::size_t            mSet = 0, mApplied = 0;
     std::uint64_t          mTotal = 0, mDone = 0;
 };

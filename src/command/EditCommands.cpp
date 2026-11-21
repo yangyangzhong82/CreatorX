@@ -19,7 +19,6 @@
 #include "mc/server/commands/CommandRawText.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/level/BlockPos.h"
-#include "mc/world/level/BlockSource.h"
 #include "mc/world/level/dimension/Dimension.h"
 
 #include <array>
@@ -70,14 +69,13 @@ constexpr std::array<std::string_view, 14> commandNames{
 };
 ll::event::ListenerPtr registerListener;
 
-// 检查改动上限、区块加载，必要时弹窗确认，然后提交任务。返回任务是否已提交或已发出确认窗口。
+// 检查改动上限，必要时弹窗确认，然后提交任务。返回任务是否已提交或已发出确认窗口。
 // onSubmitted 在任务真正提交时调用（确认窗口里点了执行之后）。
 bool startJob(
     Player&                       player,
     Feedback const&               output,
     std::unique_ptr<exec::Job>    job,
     std::uint64_t                 changes,
-    core::Box const&              area,
     std::function<void(Player&)> onSubmitted = {}
 ) {
     std::string error;
@@ -87,12 +85,6 @@ bool startJob(
     }
     if (changes > config.limits.maxChangesPerOperation) {
         output.error(tr("job.too_many_changes", changes, config.limits.maxChangesPerOperation));
-        return false;
-    }
-    BlockPos min{area.min.x, area.min.y, area.min.z};
-    BlockPos max{area.max.x, area.max.y, area.max.z};
-    if (!player.getDimensionBlockSource().areChunksFullyLoaded(min, max)) {
-        output.error(tr("job.area_unloaded"));
         return false;
     }
     if (changes <= config.limits.confirmThreshold) {
@@ -296,7 +288,7 @@ bool regionEdit(
         std::move(*pattern),
         std::move(mask)
     );
-    if (!startJob(player, output, std::move(job), core::shapeVolume(box, shape), box)) return false;
+    if (!startJob(player, output, std::move(job), core::shapeVolume(box, shape))) return false;
 
     // 只记录成功提交的图案，表单下拉框里“最近使用”才可靠。
     auto& session = getSession(player);
@@ -339,7 +331,7 @@ bool copySelection(Player& player, Feedback const& output, bool cut, std::option
     auto offset = box.min - core::Vec3i{feet.x, feet.y, feet.z};
     auto job    = edit::makeCopy(player.getUuid(), player.getDimensionId(), box, offset, std::move(pattern));
     // 复制不改动世界，只有剪切需要计入改动上限。
-    return startJob(player, output, std::move(job), cut ? box.volume() : 0, box);
+    return startJob(player, output, std::move(job), cut ? box.volume() : 0);
 }
 
 bool pasteClipboard(Player& player, Feedback const& output, PasteOptions options) {
@@ -360,7 +352,7 @@ bool pasteClipboard(Player& player, Feedback const& output, PasteOptions options
     auto job = edit::makePaste(player.getUuid(), player.getDimensionId(), clipboard, min, options.skipAir);
     std::function<void(Player&)> select;
     if (options.select) select = [box](Player& target) { selectBox(target, box); };
-    return startJob(player, output, std::move(job), clipboard->volume(), box, std::move(select));
+    return startJob(player, output, std::move(job), clipboard->volume(), std::move(select));
 }
 
 bool runHistory(Player& player, Feedback const& output, bool undo, int times) {

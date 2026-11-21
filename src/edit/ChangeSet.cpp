@@ -8,7 +8,9 @@
 #include "mc/world/level/BlockSource.h"
 #include "mc/world/level/block/Block.h"
 #include "mc/world/level/block/BlockChangeContext.h"
+#include "mc/world/level/block/BlockType.h"
 #include "mc/world/level/block/actor/BlockActor.h"
+#include "mc/world/level/block/actor/BlockActorType.h"
 
 namespace creatorx::edit {
 namespace {
@@ -81,18 +83,21 @@ bool writeBlock(
     Block const&       block,
     Block const&       extra,
     CompoundTag const* entity,
-    ChangeSet*         changes
+    ChangeSet*         changes,
+    Block const*       knownOldBlock
 ) {
     BlockPos    pos{p.x, p.y, p.z};
-    auto const& oldBlock = region.getBlock(pos);
+    auto const& oldBlock = knownOldBlock ? *knownOldBlock : region.getBlock(pos);
     auto const& oldExtra = region.getExtraBlock(pos);
     if (&oldBlock == &block && &oldExtra == &extra && !entity) return false;
 
     if (changes) {
         std::unique_ptr<CompoundTag> oldEntity;
-        if (auto* actor = region.getBlockEntity(pos)) {
-            oldEntity = std::make_unique<CompoundTag>();
-            if (!actor->save(*oldEntity, SaveContext{})) oldEntity.reset();
+        if (oldBlock.getBlockType().mBlockEntityType != BlockActorType::Undefined) {
+            if (auto* actor = region.getBlockEntity(pos)) {
+                oldEntity = std::make_unique<CompoundTag>();
+                if (!actor->save(*oldEntity, SaveContext{})) oldEntity.reset();
+            }
         }
         changes->record(p, oldBlock, oldExtra, std::move(oldEntity), block, extra, entity);
     }

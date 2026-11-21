@@ -59,30 +59,77 @@ inline std::uint64_t shapeVolume(Box const& box, BoxShape shape) {
 // 按 区块列 → y → z → x 的顺序遍历包围盒，同一区块的写入集中在一起。
 class BoxIterator {
 public:
-    explicit BoxIterator(Box const& box) : mBox(box), mChunkX(box.min.x >> 4), mChunkZ(box.min.z >> 4) {
+    explicit BoxIterator(Box const& box, BoxShape shape = BoxShape::all)
+    : mBox(box), mShape(shape), mChunkX(box.min.x >> 4), mChunkZ(box.min.z >> 4) {
         enterColumn();
     }
 
-    bool next(Vec3i& out) {
-        if (mDone) return false;
-        out = mCurrent;
-        if (++mCurrent.x <= mMaxX) return true;
+    Vec3i const* current() const { return mDone ? nullptr : &mCurrent; }
+
+    void advance() {
+        advanceOne();
+        if (mShape != BoxShape::all) seekSurface();
+    }
+
+private:
+    void advanceOne() {
+        if (++mCurrent.x <= mMaxX) return;
         mCurrent.x = mMinX;
-        if (++mCurrent.z <= mMaxZ) return true;
+        if (++mCurrent.z <= mMaxZ) return;
         mCurrent.z = mMinZ;
-        if (++mCurrent.y <= mBox.max.y) return true;
+        if (++mCurrent.y <= mBox.max.y) return;
+        nextColumn();
+    }
+
+    void nextColumn() {
+        // 围墙的中间区块行只有东西两端需要访问。
+        if (mShape == BoxShape::walls && mChunkZ > (mBox.min.z >> 4) && mChunkZ < (mBox.max.z >> 4)
+            && mChunkX < (mBox.max.x >> 4)) {
+            mChunkX = mBox.max.x >> 4;
+            enterColumn();
+            return;
+        }
         if (++mChunkX > (mBox.max.x >> 4)) {
             mChunkX = mBox.min.x >> 4;
             if (++mChunkZ > (mBox.max.z >> 4)) {
                 mDone = true;
-                return true;
+                return;
             }
         }
         enterColumn();
-        return true;
     }
 
-private:
+    void seekSurface() {
+        while (!mDone && !inShape(mBox, mCurrent, mShape)) {
+            // 保持 y → z → x 的原有顺序，跳到本行、本层或本列的下一个边界。
+            if (mMaxX == mBox.max.x) {
+                mCurrent.x = mMaxX;
+                return;
+            }
+            mCurrent.x = mMinX;
+            if (mMinX == mBox.min.x && mCurrent.z < mMaxZ) {
+                ++mCurrent.z;
+                return;
+            }
+            if (mMaxZ == mBox.max.z) {
+                mCurrent.z = mMaxZ;
+                return;
+            }
+            mCurrent.z = mMinZ;
+            if (mCurrent.y < mBox.max.y) {
+                if (mMinX == mBox.min.x || mMinZ == mBox.min.z) {
+                    ++mCurrent.y;
+                    return;
+                }
+                if (mShape == BoxShape::faces) {
+                    mCurrent.y = mBox.max.y;
+                    return;
+                }
+            }
+            nextColumn();
+        }
+    }
+
     void enterColumn() {
         mMinX    = std::max(mBox.min.x, mChunkX * 16);
         mMaxX    = std::min(mBox.max.x, mChunkX * 16 + 15);
@@ -92,6 +139,7 @@ private:
     }
 
     Box   mBox;
+    BoxShape mShape;
     int   mChunkX, mChunkZ;
     int   mMinX{}, mMaxX{}, mMinZ{}, mMaxZ{};
     Vec3i mCurrent{};
