@@ -14,6 +14,7 @@
 #include "ll/api/event/player/PlayerDestroyBlockEvent.h"
 #include "ll/api/event/player/PlayerInteractBlockEvent.h"
 #include "ll/api/event/player/PlayerUseItemEvent.h"
+#include "ll/api/event/player/PlayerSwingEvent.h"
 #include "ll/api/event/world/ServerLevelTickEvent.h"
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/Bedrock.h"
@@ -73,11 +74,14 @@ ll::event::ListenerPtr registerListener;
 ll::event::ListenerPtr destroyListener;
 ll::event::ListenerPtr interactListener;
 ll::event::ListenerPtr useItemListener;
+ll::event::ListenerPtr swingListener;
 ll::event::ListenerPtr tickListener;
 
 void refreshOutline(Player& player, PlayerSession const& session) {
     if (session.showOutline) showSelectionOutline(player, session.cuboid);
 }
+
+} // namespace
 
 core::Direction facingDirection(Player const& player) {
     using core::Direction;
@@ -90,6 +94,8 @@ core::Direction facingDirection(Player const& player) {
     }
     return view.z >= 0 ? Direction::south : Direction::north;
 }
+
+namespace {
 
 bool commitResize(
     Player&                      player,
@@ -343,7 +349,7 @@ bool setCorner(Player& player, bool first, core::Vec3i pos, Feedback const& outp
     }
     session.dimension = dimension;
     session.cuboid    = candidate;
-    if (size) refreshOutline(player, session);
+    refreshOutline(player, session);
     output.success(tr("selection.corner", first ? 1 : 2, pos.x, pos.y, pos.z));
     return true;
 }
@@ -542,12 +548,26 @@ void enableSelectionCommands() {
     interactListener = bus.emplaceListener<ll::event::PlayerInteractBlockEvent>([](auto& event) {
         if (!event.isCancelled() && tryWandClick(event.self(), event.blockPos(), false, event.item())) event.cancel();
     });
-    // 对着空气蹲下右键魔杖也能打开菜单。
     useItemListener = bus.emplaceListener<ll::event::PlayerUseItemEvent>([](auto& event) {
         auto& player = event.self();
         if (event.isCancelled() || !isWand(player, event.item())) return;
         auto& session = getSession(player);
-        if (session.wandEnabled && tryOpenMenu(player, session)) event.cancel();
+        if (!session.wandEnabled) return;
+        if (tryOpenMenu(player, session)) {
+            event.cancel();
+        } else if (session.remoteWand) {
+            auto hit = player.traceRay(config.selection.traceDistance, false, true);
+            if (hit.mType == HitResultType::Tile && tryWandClick(player, hit.mBlock, false, event.item())) event.cancel();
+        }
+    });
+    swingListener = bus.emplaceListener<ll::event::PlayerSwingEvent>([](auto& event) {
+        auto& player = event.self();
+        auto const& item = player.getSelectedItem();
+        if (!isWand(player, item)) return;
+        auto& session = getSession(player);
+        if (!session.wandEnabled || !session.remoteWand) return;
+        auto hit = player.traceRay(config.selection.traceDistance, false, true);
+        if (hit.mType == HitResultType::Tile) tryWandClick(player, hit.mBlock, true, item);
     });
     wandStartDestroy.emplace();
     {
@@ -570,12 +590,14 @@ void disableSelectionCommands() {
     if (destroyListener) bus.removeListener(destroyListener);
     if (interactListener) bus.removeListener(interactListener);
     if (useItemListener) bus.removeListener(useItemListener);
+    if (swingListener) bus.removeListener(swingListener);
     if (tickListener) bus.removeListener(tickListener);
     wandStartDestroy.reset();
     registerListener.reset();
     destroyListener.reset();
     interactListener.reset();
     useItemListener.reset();
+    swingListener.reset();
     tickListener.reset();
 }
 

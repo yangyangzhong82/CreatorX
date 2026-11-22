@@ -123,7 +123,8 @@ void enableEnhancements() {
             auto now = Clock::now();
             auto progress = exec::jobPercent(player.getUuid());
             if (progress) session->lastHudActivity = now;
-            bool visible = session->showHud
+            // 运行任务时由 JobScheduler 独占动作栏进度显示。
+            bool visible = session->showHud && !progress
                 && session->lastHudActivity != Clock::time_point{}
                 && now - session->lastHudActivity < std::chrono::seconds(session->hudIdleSeconds);
             if (!visible) {
@@ -138,8 +139,7 @@ void enableEnhancements() {
             packet.text="CreatorX";
             if (session->dimension==int(player.getDimensionId())) if(auto size=session->cuboid.size()) packet.text+=tr("hud.selection",size->x,size->y,size->z);
             if(session->clipboard) {auto size=session->clipboard->size; packet.text+=tr("hud.clipboard",size.x,size.y,size.z);}
-            if(progress) packet.text+=tr("hud.progress",*progress);
-            else packet.text+=tr("hud.history",session->history.undoCount(),session->history.redoCount());
+            packet.text+=tr("hud.history",session->history.undoCount(),session->history.redoCount());
             packet.sendTo(player);
             session->hudVisible = true;
             return true;

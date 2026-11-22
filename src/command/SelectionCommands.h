@@ -11,6 +11,7 @@ namespace creatorx {
 
 // 取执行命令的玩家并检查权限；失败时已向 output 写入错误。
 Player* getCommandPlayer(CommandOrigin const& origin, CommandOutput& output);
+core::Direction facingDirection(Player const& player);
 
 // 当前维度的完整选区；没有时已输出错误。
 core::CuboidSelection* completeSelection(Player& player, Feedback const& output);

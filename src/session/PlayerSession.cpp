@@ -53,6 +53,7 @@ PlayerSession& getSession(mce::UUID const& uuid) {
                 auto tag = storage::readNbt(path);
                 it->second.history.deserialize(tag["history"].get<CompoundTag>());
                 it->second.wandEnabled = bool(tag["wand"]);
+                if (tag.contains("remote_wand", Tag::Byte)) it->second.remoteWand = bool(tag["remote_wand"]);
                 it->second.showOutline = bool(tag["outline"]);
                 if (tag.contains("hud", Tag::Byte)) it->second.showHud = bool(tag["hud"]);
                 if (tag.contains("hud_idle_seconds", Tag::Int)) {
@@ -96,6 +97,7 @@ void saveSession(mce::UUID const& uuid) {
         CompoundTag tag;
         tag["history"] = session->history.serialize();
         tag["wand"] = session->wandEnabled;
+        tag["remote_wand"] = session->remoteWand;
         tag["outline"] = session->showOutline;
         tag["hud"] = session->showHud;
         tag["hud_idle_seconds"] = session->hudIdleSeconds;

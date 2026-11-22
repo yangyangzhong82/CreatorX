@@ -31,7 +31,7 @@ CreatorX 是基于 LeviLamina（`26.60.*`）的 Minecraft 基岩版快速建造�
 | `outset` | `/cx outset <格数> [-h \| -v]` | 向外等距外扩选区（默认六面同时；`-h` 仅水平四面，`-v` 仅上下两面） |
 | `inset` | `/cx inset <格数> [-h \| -v]` | 向内等距内缩选区（默认六面同时；`-h` 仅水平，`-v` 仅垂直） |
 | `count` | `/cx count <掩码>` | 统计选区内符合 `<掩码>` 条件的方块数量 |
-| `distr` | `/cx distr [-c]` | 统计选区内所有方块种类与数量（从多到少排序）；加 `-c` 改为统计当前剪贴板 |
+| `distr` | `/cx distr [-c]` | 按数量列出前 12 种方块及占比，并提示省略的种类数。`-c` 统计当前剪贴板。 |
 
 > **方向可选值**：`me`（当前视线朝向，含抬头/低头）、`up`（+Y）、`down`（-Y）、`north`（-Z）、`south`（+Z）、`east`（+X）、`west`（-X）。
 
@@ -91,9 +91,10 @@ CreatorX 是基于 LeviLamina（`26.60.*`）的 Minecraft 基岩版快速建造�
 | --- | --- | --- |
 | `copy` | `/cx copy [-e] [-m <掩码>]` | 复制选区并记录相对玩家脚下的偏移量（`-e` 含非玩家实体，`-m` 掩码放最后） |
 | `cut` | `/cx cut [留下的图案] [-e] [-m <掩码>]` | 复制选区后将原位置填充为指定图案（默认 `air`） |
-| `paste` | `/cx paste [-a] [-o] [-s] [-p] [-e] [-m <掩码>]` | 粘贴剪贴板：`-a` 跳过空气，`-o` 贴回原世界坐标，`-s` 粘贴后选中区域，**`-p` 假方块预览并弹窗确认**，`-e` 含实体，`-m` 掩码过滤（放最后） |
+| `paste` | `/cx paste [-a] [-o] [-s] [-p] [-e] [-m <掩码>]` | `-a` 跳过空气，`-o` 原位，`-s` 选中粘贴区，`-p` 显示预览，`-e` 含实体，`-m` 掩码过滤（放最后）。 |
+| `pastepreview` / `confirm` | `/cx pastepreview <dx> <dy> <dz> [Y轴角度]` / `/cx confirm` | 调整预览位置和朝向，或确认落地。 |
 | `rotate` | `/cx rotate <Y角度> [X角度] [Z角度]` | 按 90° 倍数三维旋转剪贴板，自动同步旋转楼梯/门/原木/铁轨等方块状态与实体朝向 |
-| `flip` | `/cx flip [方向]` | 沿指定轴镜像翻转剪贴板（默认 `east` 左右翻转），自动镜像门铰链与方块朝向 |
+| `flip` | `/cx flip [方向]` | 沿指定轴镜像翻转剪贴板，默认按玩家当前朝向。 |
 | `clearclipboard` | `/cx clearclipboard` | 清空当前剪贴板 |
 | `schem` | `/cx schem save <名称> [cxs\|mcstructure]`<br>`/cx schem load <名称> [cxs\|mcstructure]`<br>`/cx schem list [关键词]`<br>`/cx schem delete <名称> [cxs\|mcstructure]` | 保存剪贴板为原理图、加载原理图到剪贴板、列出/搜索原理图、删除原理图（支持 `.cxs` 与原版结构方块通用的 `.mcstructure`，存于 `mods/creatorx/data/schematics/`） |
 

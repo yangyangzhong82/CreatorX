@@ -272,9 +272,16 @@ public:
         if (end != exec::JobEnd::completed) { tell(player, mError.empty() ? std::string(tr("inspect.cancelled")) : mError); return; }
         if (mMask) { tell(player, tr("inspect.count", mMatched)); return; }
         std::vector<std::pair<std::string, std::uint64_t>> values(mCounts.begin(), mCounts.end());
-        std::ranges::sort(values, [](auto const& a, auto const& b) { return a.second > b.second; });
+        std::ranges::sort(values, [](auto const& a, auto const& b) {
+            return a.second == b.second ? a.first < b.first : a.second > b.second;
+        });
+        constexpr size_t maxRows = 12;
         std::string text = tr("inspect.count", mMatched) + "\n";
-        for (auto const& [name, count] : values) text += fmt::format("{}: {}\n", name, count);
+        for (size_t i = 0; i < std::min(values.size(), maxRows); ++i) {
+            auto const& [name, count] = values[i];
+            text += fmt::format("{}: {} ({:.1f}%)\n", name, count, 100.0 * double(count) / double(mMatched));
+        }
+        if (values.size() > maxRows) text += tr("inspect.more", values.size() - maxRows);
         tell(player, text);
     }
 private:

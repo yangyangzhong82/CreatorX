@@ -71,6 +71,45 @@ private:
     std::future<CompoundTag> mRead;
     std::shared_future<void> mWrite;
 };
+
+bool runSchematic(Player& player, Feedback const& output, std::string_view action, std::string name, std::string format) {
+    auto path = schematic::path(std::move(name), std::move(format));
+    std::string error;
+    if (!exec::canSubmit(player.getUuid(), error)) {
+        output.error(error);
+        return false;
+    }
+
+    std::unique_ptr<exec::Job> job;
+    if (action == "save") {
+        auto clipboard = getSession(player).clipboard;
+        if (!clipboard) throw std::runtime_error(std::string(tr("clipboard.empty")));
+        auto write = storage::queueNbt(path, [clipboard, native = path.extension() == ".mcstructure"] {
+            return schematic::serialize(*clipboard, native);
+        });
+        job = std::make_unique<SchematicJob>(player.getUuid(), std::move(write));
+    } else if (action == "load") {
+        getSession(player);
+        storage::flushWrites();
+        if (!std::filesystem::is_regular_file(path)) throw std::runtime_error(std::string(tr("schematic.missing")));
+        if (std::filesystem::file_size(path) > 256ull * 1024 * 1024) throw std::runtime_error(std::string(tr("schematic.too_large")));
+        job = std::make_unique<SchematicJob>(
+            player.getUuid(), std::async(std::launch::async, [path] { return storage::readNbt(path); })
+        );
+    } else if (action == "delete") {
+        storage::flushWrites();
+        if (!std::filesystem::remove(path)) throw std::runtime_error(std::string(tr("schematic.missing")));
+        output.success(tr("schematic.done"));
+        return true;
+    } else {
+        throw std::runtime_error(std::string(tr("schematic.usage")));
+    }
+
+    if (exec::submitJob(player, std::move(job), error)) return true;
+    output.error(error);
+    return false;
+}
+
 void execute(Player& player, Feedback const& output, std::string_view name, std::string_view raw) {
     auto tokens = edit::splitTokens(raw);
     if (name == "move" || name == "stack") {
@@ -117,31 +156,7 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
             return;
         }
         if (tokens.size() < 2) throw std::runtime_error(std::string(tr("schematic.usage")));
-        auto path = schematic::path(std::string(tokens[1]), tokens.size() > 2 ? std::string(tokens[2]) : "cxs");
-        std::string error;
-        if(!exec::canSubmit(player.getUuid(),error)) {output.error(error);return;}
-        std::unique_ptr<exec::Job> job;
-        if (tokens[0] == "save") {
-            auto clipboard = getSession(player).clipboard;
-            if (!clipboard) throw std::runtime_error(std::string(tr("clipboard.empty")));
-            auto write = storage::queueNbt(path, [clipboard, native = path.extension() == ".mcstructure"] {
-                return schematic::serialize(*clipboard, native);
-            });
-            job = std::make_unique<SchematicJob>(player.getUuid(), std::move(write));
-        } else if (tokens[0] == "load") {
-            getSession(player);
-            if (std::filesystem::file_size(path) > 256ull * 1024 * 1024) throw std::runtime_error(std::string(tr("schematic.too_large")));
-            storage::flushWrites();
-            job=std::make_unique<SchematicJob>(player.getUuid(),std::async(std::launch::async,[path] {return storage::readNbt(path);}));
-        } else if (tokens[0] == "delete") {
-            storage::flushWrites();
-            if (!std::filesystem::remove(path)) throw std::runtime_error(std::string(tr("schematic.missing")));
-        } else throw std::runtime_error(std::string(tr("schematic.usage")));
-        if(job) {
-            if(!exec::submitJob(player,std::move(job),error)) output.error(error);
-            return;
-        }
-        output.success(tr("schematic.done"));
+        runSchematic(player, output, tokens[0], std::string(tokens[1]), tokens.size() > 2 ? std::string(tokens[2]) : "cxs");
         return;
     }
     if (name == "distr" && raw == "-c") {
@@ -162,7 +177,11 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
         }
         auto job = edit::makeInspect(player.getUuid(), player.getDimensionId(), *selection->box(), std::move(mask));
         std::string error;
-        if (!exec::submitJob(player, std::move(job), error)) output.error(error);
+        if (!exec::submitJob(player, std::move(job), error)) {
+            output.error(error);
+        } else if (name == "count" && raw != "#existing" && raw != "hand" && raw != "offhand") {
+            rememberRecent(getSession(player).recentMasks, raw);
+        }
         return;
     }
     auto feet = player.getFeetBlockPos();
@@ -258,7 +277,9 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
     auto pattern = edit::Pattern::parse(patternText, player, error);
     if (!pattern) throw std::runtime_error(error);
     auto job = edit::makeComputedEdit(player.getUuid(), player.getDimensionId(), box, std::move(*pattern), std::move(filter), std::string(name));
-    submitEditJob(player, output, std::move(job), box.volume());
+    submitEditJob(player, output, std::move(job), box.volume(), [pattern = std::string(patternText)](Player& target) {
+        if (pattern != "hand" && pattern != "offhand") rememberRecent(getSession(target).recentPatterns, pattern);
+    });
 }
 void registerCommands(CommandRegistry& registry) {
     auto& registrar = ll::command::CommandRegistrar::getServerInstance();
@@ -290,6 +311,15 @@ void registerCommands(CommandRegistry& registry) {
     }
 }
 } // namespace
+bool executeSchematic(Player& player, Feedback const& output, std::string_view action, std::string name, std::string format) {
+    try {
+        return runSchematic(player, output, action, std::move(name), std::move(format));
+    } catch (std::exception const& error) {
+        output.error(tr("advanced.failed", error.what()));
+        return false;
+    }
+}
+
 void executeAdvanced(Player& player,Feedback const& output,std::string_view operation,std::string_view arguments) {
     try {execute(player,output,operation,arguments);}
     catch(std::exception const& error) {output.error(tr("advanced.failed",error.what()));}

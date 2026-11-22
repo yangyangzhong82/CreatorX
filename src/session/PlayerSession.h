@@ -32,6 +32,7 @@ struct PlayerSession {
     int                                    dimension{};
     core::CuboidSelection                  cuboid;
     bool                                   wandEnabled = true;
+    bool                                   remoteWand = false;
     bool                                   showOutline = true;
     bool                                   showHud = true;
     int                                    hudIdleSeconds = defaultHudIdleSeconds;

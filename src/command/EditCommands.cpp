@@ -28,6 +28,7 @@
 
 #include <array>
 #include <functional>
+#include <limits>
 
 namespace creatorx {
 
@@ -66,7 +67,14 @@ struct FlipParams {
 };
 struct HelpParams { ll::command::Optional<CommandRawText> topic; };
 
-enum class SimpleEditAction { cancel, clearclipboard, clearhistory, menu, reload, history };
+enum class SimpleEditAction { cancel, clearclipboard, clearhistory, menu, reload, history, confirm };
+
+struct PreviewAdjustParams {
+    int x;
+    int y;
+    int z;
+    ll::command::Optional<int> rotation;
+};
 
 struct SimpleEditParams {
     SimpleEditAction action;
@@ -74,7 +82,7 @@ struct SimpleEditParams {
 
 namespace {
 
-constexpr std::array<std::string_view, 13> commandNames{
+constexpr std::array<std::string_view, 14> commandNames{
     "set",
     "replace",
     "walls",
@@ -87,7 +95,8 @@ constexpr std::array<std::string_view, 13> commandNames{
     "redo",
     "help",
     "rotate",
-    "flip"
+    "flip",
+    "pastepreview"
 };
 ll::event::ListenerPtr registerListener;
 std::uint64_t generation=0;
@@ -100,7 +109,7 @@ bool startJob(
     std::unique_ptr<exec::Job>    job,
     std::uint64_t                 changes,
     std::function<void(Player&)> onSubmitted = {},
-    std::uint64_t previewToken = 0
+    bool confirmed = false
 ) {
     std::string error;
     if (!exec::canSubmit(player.getUuid(), error)) {
@@ -111,7 +120,7 @@ bool startJob(
         output.error(tr("job.too_many_changes", changes, config.limits.maxChangesPerOperation));
         return false;
     }
-    if (changes <= config.limits.confirmThreshold && !previewToken) {
+    if (changes <= config.limits.confirmThreshold || confirmed) {
         if (!exec::submitJob(player, std::move(job), error)) {
             output.error(error);
             return false;
@@ -130,10 +139,9 @@ bool startJob(
     );
     form.sendTo(
         player,
-        [pending, onSubmitted, previewToken, dimension=int(player.getDimensionId()), expectedGeneration=generation](Player& target, ll::form::ModalFormResult result, ll::form::FormCancelReason) {
+        [pending, onSubmitted, dimension=int(player.getDimensionId()), expectedGeneration=generation](Player& target, ll::form::ModalFormResult result, ll::form::FormCancelReason) {
             bool valid=dimension==int(target.getDimensionId()) && generation==expectedGeneration
                 && target.getCommandPermissionLevel()>=CommandPermissionLevel::GameDirectors;
-            if(previewToken) valid=finishPastePreview(target,previewToken) && valid;
             if(!valid) { target.sendMessage(tr("preview.expired")); return; }
             if (result != ll::form::ModalFormSelectedButton::Upper || !*pending) {
                 target.sendMessage(tr("job.confirm_declined"));
@@ -209,6 +217,9 @@ void executeSimpleEdit(SimpleEditAction action, CommandOrigin const& origin, Com
         break;
     case SimpleEditAction::history:
         output.success(getSession(*player).history.describe());
+        break;
+    case SimpleEditAction::confirm:
+        confirmPastePreview(*player, output);
         break;
     }
 }
@@ -301,8 +312,16 @@ void registerEditCommand(ll::command::CommandHandle& handle, std::string_view na
             .optional("direction")
             .execute([](Origin origin, Output output, FlipParams const& args) {
                 if (auto* player = getCommandPlayer(origin, output)) {
-                    auto direction = args.direction.value_or(core::Direction::east);
+                    auto direction = args.direction.value_or(core::Direction::me);
                     flipClipboard(*player, output, direction);
+                }
+            });
+    } else if (name == "pastepreview") {
+        subOverload<PreviewAdjustParams>(handle, name, subcommand)
+            .required("x").required("y").required("z").optional("rotation")
+            .execute([](Origin origin, Output output, PreviewAdjustParams const& args) {
+                if (auto* player = getCommandPlayer(origin, output)) {
+                    adjustPastePreview(*player, output, {args.x, args.y, args.z}, args.rotation.value_or(0));
                 }
             });
     } else if(name=="help") {
@@ -460,6 +479,40 @@ bool copySelection(Player& player, Feedback const& output, bool cut, std::option
     return startJob(player, output, std::move(job), cut ? box.volume() : 0);
 }
 
+namespace {
+std::optional<core::Box> placementBox(
+    Player& player, Feedback const& output, core::Vec3i base, core::Vec3i offset, core::Vec3i size
+) {
+    auto x = std::int64_t(base.x) + offset.x;
+    auto y = std::int64_t(base.y) + offset.y;
+    auto z = std::int64_t(base.z) + offset.z;
+    auto const& height = *player.getDimension().mHeightRange;
+    if (y < height.mMin || y + size.y > height.mMax) {
+        output.error(tr("clipboard.out_of_height"));
+        return {};
+    }
+    if (x < std::numeric_limits<int>::min() || z < std::numeric_limits<int>::min()
+        || x + size.x > std::numeric_limits<int>::max() || z + size.z > std::numeric_limits<int>::max()) {
+        output.error(tr("selection.expand_range"));
+        return {};
+    }
+    return core::Box{{int(x), int(y), int(z)}, {int(x + size.x - 1), int(y + size.y - 1), int(z + size.z - 1)}};
+}
+
+bool submitPaste(Player& player, Feedback const& output, PastePlacement placement, core::Box box, bool confirmed) {
+    auto changes = placement.clipboard->volume();
+    auto job = edit::makePaste(
+        player.getUuid(), player.getDimensionId(), std::move(placement.clipboard), box.min,
+        placement.skipAir, std::move(placement.mask), placement.entities
+    );
+    auto onSubmitted = [box, select = placement.select](Player& target) {
+        cancelPastePreview(target);
+        if (select) selectBox(target, box);
+    };
+    return startJob(player, output, std::move(job), changes, onSubmitted, confirmed);
+}
+} // namespace
+
 bool pasteClipboard(Player& player, Feedback const& output, PasteOptions options) {
     auto clipboard = getSession(player).clipboard;
     if (!clipboard) {
@@ -467,28 +520,59 @@ bool pasteClipboard(Player& player, Feedback const& output, PasteOptions options
         return false;
     }
     auto feet = player.getFeetBlockPos();
-    auto min  = options.original ? clipboard->origin : core::Vec3i{feet.x, feet.y, feet.z} + clipboard->offset;
-    auto box  = core::Box{min, min + clipboard->size - core::Vec3i{1, 1, 1}};
-
-    auto const& range = *player.getDimension().mHeightRange;
-    if (box.min.y < range.mMin || box.max.y >= range.mMax) {
-        output.error(tr("clipboard.out_of_height"));
-        return false;
-    }
+    auto box = placementBox(player, output, options.original ? clipboard->origin : core::Vec3i{feet.x, feet.y, feet.z},
+                            options.original ? core::Vec3i{} : clipboard->offset, clipboard->size);
+    if (!box) return false;
     std::optional<edit::Mask> mask;
     if(options.mask) {
         std::string error;
         mask=edit::Mask::parse(*options.mask,player,error);
         if(!mask) {output.error(error);return false;}
     }
-    auto job = edit::makePaste(player.getUuid(), player.getDimensionId(), clipboard, min, options.skipAir,mask,options.entities);
-    std::function<void(Player&)> select;
-    if (options.select) select = [box](Player& target) { selectBox(target, box); };
-    std::uint64_t token=0;
-    if(options.preview) token=showPastePreview(player,*clipboard,min,options.skipAir,mask ? &*mask : nullptr);
-    bool submitted=startJob(player, output, std::move(job), clipboard->volume(), std::move(select),token);
-    if(!submitted && token) cancelPastePreview(player);
-    return submitted;
+    PastePlacement placement{clipboard, box->min, options.skipAir, options.select, options.entities, std::move(mask)};
+    if (!options.preview) return submitPaste(player, output, std::move(placement), *box, false);
+    if (clipboard->volume() > config.limits.maxChangesPerOperation) {
+        output.error(tr("job.too_many_changes", clipboard->volume(), config.limits.maxChangesPerOperation));
+        return false;
+    }
+    showPastePreview(player, std::move(placement));
+    output.success(tr("preview.ready", config.visual.previewSeconds));
+    return true;
+}
+
+bool confirmPastePreview(Player& player, Feedback const& output) {
+    auto placement = getPastePreview(player);
+    if (!placement) {
+        output.error(tr("preview.none"));
+        return false;
+    }
+    auto box = placementBox(player, output, placement->min, {}, placement->clipboard->size);
+    return box && submitPaste(player, output, *placement, *box, true);
+}
+
+bool adjustPastePreview(Player& player, Feedback const& output, core::Vec3i offset, int rotation) {
+    auto current = getPastePreview(player);
+    if (!current) {
+        output.error(tr("preview.none"));
+        return false;
+    }
+    if (rotation % 90 != 0) {
+        output.error(tr("clipboard.rotation_invalid"));
+        return false;
+    }
+    auto placement = *current;
+    try {
+        placement.clipboard = edit::rotateClipboard(placement.clipboard, rotation / 90);
+    } catch (std::exception const& error) {
+        output.error(tr("advanced.failed", error.what()));
+        return false;
+    }
+    auto box = placementBox(player, output, placement.min, offset, placement.clipboard->size);
+    if (!box) return false;
+    placement.min = box->min;
+    showPastePreview(player, std::move(placement));
+    output.success(tr("preview.moved", box->min.x, box->min.y, box->min.z, config.visual.previewSeconds));
+    return true;
 }
 
 bool runHistory(Player& player, Feedback const& output, bool undo, int times, std::string_view target) {
@@ -528,8 +612,8 @@ bool runHistory(Player& player, Feedback const& output, bool undo, int times, st
 }
 
 void cancelPlayerJob(Player& player, Feedback const& output) {
-    cancelPastePreview(player);
-    if (exec::cancelJob(player.getUuid())) output.success(tr("job.cancel_requested"));
+    if (cancelPastePreview(player)) output.success(tr("preview.cancelled"));
+    else if (exec::cancelJob(player.getUuid())) output.success(tr("job.cancel_requested"));
     else output.error(tr("job.none"));
 }
 
@@ -566,10 +650,11 @@ bool rotateClipboard(Player& player, Feedback const& output, int quarterTurns,in
 
 bool flipClipboard(Player& player, Feedback const& output, core::Direction direction) {
     auto& clipboard = getSession(player).clipboard;
-    if (!clipboard || direction == core::Direction::me) {
-        output.error(clipboard ? tr("clipboard.bad_transform") : tr("clipboard.empty"));
+    if (!clipboard) {
+        output.error(tr("clipboard.empty"));
         return false;
     }
+    if (direction == core::Direction::me) direction = facingDirection(player);
     try { clipboard = edit::flipClipboard(clipboard, direction); }
     catch (std::exception const& error) { output.error(tr("advanced.failed", error.what())); return false; }
     output.success(tr("clipboard.flipped"));

@@ -141,7 +141,7 @@ std::filesystem::path path(std::string name, std::string format) {
     return storage::dataDir() / "schematics" / p;
 }
 
-std::string list(std::string_view search) {
+std::vector<std::string> listFiles(std::string_view search) {
     auto directory = storage::dataDir() / "schematics";
     std::filesystem::create_directories(directory);
     std::vector<std::string> names;
@@ -154,8 +154,12 @@ std::string list(std::string_view search) {
         if (name.find(search) != std::string::npos) names.push_back(std::move(name));
     }
     std::ranges::sort(names);
+    return names;
+}
+
+std::string list(std::string_view search) {
     std::string result;
-    for (auto const& name : names) result += name + "\n";
+    for (auto const& name : listFiles(search)) result += name + "\n";
     return result;
 }
 } // namespace creatorx::schematic

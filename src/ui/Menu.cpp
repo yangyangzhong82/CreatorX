@@ -10,6 +10,7 @@
 #include "mod/Global.h"
 #include "net/Enhancements.h"
 #include "session/PlayerSession.h"
+#include "visual/PastePreview.h"
 
 #include "ll/api/form/CustomForm.h"
 #include "ll/api/form/ModalForm.h"
@@ -381,6 +382,90 @@ void openBlockSearch(Player& player, BlockPicked picked, std::string query) {
     });
 }
 
+constexpr std::array<std::string_view, 13> buildOperations{
+    "sphere", "hsphere", "cyl", "hcyl", "pyramid", "hpyramid", "hollow", "overlay", "center", "move", "stack", "count", "distr"
+};
+
+void openBuildOperation(
+    Player& player, std::string_view operation, Values const& saved = {}, std::string const& error = {}
+) {
+    bool sphere = operation == "sphere" || operation == "hsphere";
+    bool cylinder = operation == "cyl" || operation == "hcyl";
+    bool pyramid = operation == "pyramid" || operation == "hpyramid";
+    bool transfer = operation == "move" || operation == "stack";
+    bool hollow = operation == "hollow";
+    bool distribution = operation == "distr";
+    bool count = operation == "count";
+    bool usesPattern = !transfer && !distribution;
+    static constexpr std::array directions{"", "up", "down", "north", "south", "east", "west"};
+
+    auto& session = getSession(player);
+    auto choices = usesPattern ? patternChoices(player, count ? session.recentMasks : session.recentPatterns, count)
+                               : Choices{};
+    CustomForm form(text("operation." + std::string(operation)));
+    if (!error.empty()) form.appendLabel("§c" + error + "§r");
+    if (usesPattern) {
+        auto typed = inputText(saved, "pattern");
+        auto preferred = typed.empty() && !hollow ? choices.preferred : 0;
+        form.appendDropdown("source", text(count ? "menu.replace_from" : "menu.pattern_source"), choices.labels(), preferred);
+        form.appendInput(
+            "pattern", text(count ? "menu.mask_input" : "menu.pattern_input"),
+            text(count ? "menu.mask_placeholder" : "menu.pattern_placeholder"), typed
+        );
+    }
+    if (sphere || cylinder || pyramid || transfer || hollow) {
+        auto key = sphere || cylinder ? "menu.build_radius" : pyramid ? "menu.build_layers"
+                   : hollow ? "menu.build_thickness" : operation == "move" ? "menu.build_distance" : "menu.build_copies";
+        auto initial = hollow || transfer ? "1" : "5";
+        form.appendInput("amount", text(key), initial, saved.contains("amount") ? inputText(saved, "amount") : initial);
+    }
+    if (cylinder) form.appendInput("height", text("menu.height"), "10", saved.contains("height") ? inputText(saved, "height") : "10");
+    if (sphere) form.appendToggle("raised", text("menu.build_raised"), number(saved, "raised") != 0);
+    if (transfer) {
+        form.appendDropdown("direction", text("menu.resize_direction"),
+            {text("menu.dir_me"), text("menu.dir_up"), text("menu.dir_down"), text("menu.dir_north"),
+             text("menu.dir_south"), text("menu.dir_east"), text("menu.dir_west")}, index(saved, "direction"));
+        form.appendToggle("air", text("menu.paste_skip_air"), saved.empty() || number(saved, "air") != 0);
+        form.appendToggle("select", text("menu.build_follow"), saved.empty() || number(saved, "select") != 0);
+    }
+    if (distribution) form.appendToggle("clipboard", text("menu.build_distr_clipboard"), number(saved, "clipboard") != 0);
+    form.setSubmitButton(text("menu.apply"));
+    form.sendTo(player, [operation, choices, usesPattern, sphere, cylinder, pyramid, transfer, hollow, distribution](
+        Player& target, CustomFormResult const& result, FormCancelReason
+    ) {
+        if (!result) return openBuildMenu(target);
+        if (usesPattern && choices.searches(index(*result, "source"))) {
+            return openBlockSearch(target, [operation, saved = *result](Player& p, std::string id) mutable {
+                if (!id.empty()) saved["pattern"] = std::move(id);
+                openBuildOperation(p, operation, saved);
+            });
+        }
+        auto pattern = usesPattern ? pickPattern(*result, "pattern", "source", choices) : std::string{};
+        auto amount = inputText(*result, "amount");
+        auto args = pattern;
+        if (hollow) args = amount + (pattern.empty() ? "" : " " + pattern);
+        if (sphere || cylinder || pyramid) {
+            if (pattern.empty()) return openBuildOperation(target, operation, *result, text("menu.need_pattern"));
+            args = pattern + " " + amount;
+            if (cylinder) args += " " + inputText(*result, "height");
+            if (sphere && number(*result, "raised")) args += " -r";
+        }
+        if (transfer) {
+            args = amount + " " + directions[std::min(index(*result, "direction"), directions.size() - 1)];
+            if (number(*result, "air")) args += " -a";
+            if (number(*result, "select")) args += " -s";
+        }
+        if (distribution && number(*result, "clipboard")) args = "-c";
+        std::string message;
+        executeAdvanced(target, Feedback(target, &message), operation, args);
+        if (!message.empty()) {
+            auto retry = *result;
+            retry["pattern"] = std::move(pattern);
+            openBuildOperation(target, operation, retry, message);
+        }
+    });
+}
+
 void openFillForm(Player& player, size_t shape, std::optional<size_t> source, std::string input, std::string error) {
     if (!hasSelection(player)) return openSelectionMenu(player, text("menu.need_selection"), true);
     auto choices = patternChoices(player, getSession(player).recentPatterns, false);
@@ -403,7 +488,7 @@ void openFillForm(Player& player, size_t shape, std::optional<size_t> source, st
     form.appendInput("pattern", text("menu.pattern_input"), text("menu.pattern_placeholder"), input);
     form.setSubmitButton(text("menu.fill_submit"));
     form.sendTo(player, [choices](Player& target, CustomFormResult const& result, FormCancelReason) {
-        if (!result) return;
+        if (!result) return openMain(target);
         static constexpr std::array shapes{core::BoxShape::all, core::BoxShape::walls, core::BoxShape::faces};
         auto shapeIndex  = std::min(index(*result, "shape"), shapes.size() - 1);
         auto sourceIndex = index(*result, "source");
@@ -439,7 +524,7 @@ void openReplaceForm(Player& player, std::string mask, std::string pattern, std:
     form.appendInput("to", text("menu.pattern_input"), text("menu.pattern_placeholder"), pattern);
     form.setSubmitButton(text("menu.replace_submit"));
     form.sendTo(player, [from, to](Player& target, CustomFormResult const& result, FormCancelReason) {
-        if (!result) return;
+        if (!result) return openMain(target);
         auto mask    = pickPattern(*result, "from", "from_source", from);
         auto pattern = pickPattern(*result, "to", "to_source", to);
         bool searchFrom = from.searches(index(*result, "from_source"));
@@ -495,6 +580,33 @@ void openPasteForm(Player& player) {
     });
 }
 
+void openPreviewAdjustForm(Player& player) {
+    CustomForm form(text("menu.preview_adjust"));
+    form.appendInput("x", text("menu.preview_x"), "0", "0");
+    form.appendInput("y", text("menu.preview_y"), "0", "0");
+    form.appendInput("z", text("menu.preview_z"), "0", "0");
+    form.appendDropdown("rotation", text("menu.rotation_y"), {"0", "90", "180", "270"});
+    form.setSubmitButton(text("menu.apply"));
+    form.sendTo(player, [](Player& target, CustomFormResult const& result, FormCancelReason) {
+        if (!result) return openClipboardMenu(target);
+        core::Vec3i offset{};
+        std::array<int*, 3> values{&offset.x, &offset.y, &offset.z};
+        constexpr std::array keys{"x", "y", "z"};
+        for (size_t i = 0; i < keys.size(); ++i) {
+            auto raw = inputText(*result, keys[i]);
+            auto [end, ec] = std::from_chars(raw.data(), raw.data() + raw.size(), *values[i]);
+            if (ec != std::errc{} || end != raw.data() + raw.size()) {
+                return openClipboardMenu(target, text("preview.bad_offset"), true);
+            }
+        }
+        auto rotation = 90 * int(std::min(index(*result, "rotation"), size_t{3}));
+        std::string message;
+        if (!adjustPastePreview(target, Feedback(target, &message), offset, rotation)) {
+            openClipboardMenu(target, message, true);
+        }
+    });
+}
+
 void openClipboardMenu(Player& player, std::string const& notice, bool error) {
     auto& session = getSession(player);
     SimpleForm form(text("menu.clipboard_title"), withNotice(notice, error, clipboardSummary(session) + "\n\n" + text("menu.clipboard_hint")));
@@ -505,10 +617,21 @@ void openClipboardMenu(Player& player, std::string const& notice, bool error) {
     addButton(form, "menu.copy", icon::clipboard, [run](Player& p) { run(p, false); });
     addButton(form,"menu.copy_options",icon::clipboard,[](Player& p) {openCopyOptions(p);});
     addButton(form, "menu.cut", icon::clipboard, [run](Player& p) { run(p, true); });
+    addButton(form, "menu.schematics", icon::clipboard, [](Player& p) { openSchematicMenu(p); });
+    if (getPastePreview(player)) {
+        addButton(form, "menu.preview_confirm", icon::clipboard, [](Player& p) {
+            std::string message;
+            if (!confirmPastePreview(p, Feedback(p, &message))) openClipboardMenu(p, message, true);
+        });
+        addButton(form, "menu.preview_adjust", icon::settings, [](Player& p) { openPreviewAdjustForm(p); });
+        addButton(form, "menu.preview_cancel", icon::cancel, [](Player& p) {
+            if (cancelPastePreview(p)) p.sendMessage(tr("preview.cancelled"));
+            openClipboardMenu(p);
+        });
+    }
     if (session.clipboard) {
         addButton(form, "menu.paste", icon::clipboard, [](Player& p) { openPasteForm(p); });
-    addButton(form,"menu.transform",icon::clipboard,[](Player& p) {openTransformMenu(p);});
-    addButton(form,"menu.schematics",icon::clipboard,[](Player& p) {openSchematicMenu(p);});
+        addButton(form,"menu.transform",icon::clipboard,[](Player& p) {openTransformMenu(p);});
         addButton(form, "menu.clear_clipboard", icon::cancel, [](Player& p) {
             clearClipboard(p, Feedback(p));
             openClipboardMenu(p);
@@ -613,6 +736,12 @@ void openSettingsMenu(Player& player) {
             openSettingsMenu(target);
         });
     });
+    addButton(form, session.remoteWand ? "menu.remote_wand_on" : "menu.remote_wand_off", icon::look, [](Player& p) {
+        auto& preferences = getSession(p);
+        preferences.remoteWand = !preferences.remoteWand;
+        saveSession(p.getUuid());
+        openSettingsMenu(p);
+    });
     addButton(form, "menu.back", icon::back, [](Player& p) { openMain(p); });
     form.sendTo(player);
 }
@@ -633,6 +762,10 @@ void openMain(Player& player, std::string const& notice, bool error) {
 
     SimpleForm form(text("menu.title"), withNotice(notice, error, status));
     addButton(form, "menu.selection", icon::selection, [](Player& p) { openSelectionMenu(p); });
+    if (session.wandEnabled && session.remoteWand) {
+        addButton(form, "menu.pos1_look", icon::look, [](Player& p) { setLookCorner(p, true, Feedback(p)); });
+        addButton(form, "menu.pos2_look", icon::look, [](Player& p) { setLookCorner(p, false, Feedback(p)); });
+    }
     addButton(form, "menu.fill", icon::fill, [](Player& p) { openFillForm(p); });
     addButton(form,"menu.build",icon::fill,[](Player& p) {openBuildMenu(p);});
     addButton(form, "menu.replace", icon::replace, [](Player& p) { openReplaceForm(p); });
@@ -653,6 +786,19 @@ void openMain(Player& player, std::string const& notice, bool error) {
 }
 
 } // namespace
+
+void openBuildMenu(Player& player) {
+    SimpleForm form(text("menu.build"));
+    for (auto operation : buildOperations) form.appendButton(text("operation." + std::string(operation)));
+    form.appendButton(text("menu.back"));
+    form.sendTo(player, [](Player& target, int selected, FormCancelReason) {
+        if (selected < 0 || size_t(selected) >= buildOperations.size()) return openMainMenu(target);
+        openBuildOperation(target, buildOperations[size_t(selected)]);
+    });
+}
+
+void openClipboardRoot(Player& player) { openClipboardMenu(player); }
+void openSelectionRoot(Player& player) { openSelectionMenu(player); }
 
 void openMainMenu(Player& player) {
     if (player.getCommandPermissionLevel() < CommandPermissionLevel::GameDirectors) {

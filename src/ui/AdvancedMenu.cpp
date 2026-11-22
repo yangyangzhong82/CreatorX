@@ -5,8 +5,10 @@
 #include "command/SelectionCommands.h"
 #include "mod/Global.h"
 #include "schematic/Schematic.h"
+#include "session/PlayerSession.h"
 #include "ll/api/form/CustomForm.h"
 #include "ll/api/form/ModalForm.h"
+#include "ll/api/form/SimpleForm.h"
 #include "mc/world/actor/player/Player.h"
 #include <charconv>
 #include <array>
@@ -28,51 +30,19 @@ size_t number(Values const& values,std::string const& key) {
     }
     return 0;
 }
-}
-void openBuildMenu(Player& player) {
-    static constexpr std::array<std::string_view,12> operations{"sphere","hsphere","cyl","hcyl","pyramid","hpyramid","hollow","overlay","move","stack","count","distr"};
-    ll::form::CustomForm form(text("menu.build"));
-    std::vector<std::string> labels;
-    for(auto name:operations) labels.push_back(text("operation."+std::string(name)));
-    form.appendDropdown("operation",text("menu.action"),labels);
-    form.appendInput("pattern",text("menu.pattern_input"),"stone","hand");
-    form.appendInput("amount",text("menu.amount"),"5","5");
-    form.appendInput("height",text("menu.height"),"10","10");
-    form.appendDropdown("direction",text("menu.resize_direction"),{text("menu.dir_me"),text("menu.dir_up"),text("menu.dir_down"),text("menu.dir_north"),text("menu.dir_south"),text("menu.dir_east"),text("menu.dir_west")});
-    form.appendToggle("air",text("menu.paste_skip_air"),true);
-    form.appendToggle("select",text("menu.paste_select"),true);
-    form.setSubmitButton(text("menu.apply"));
-    form.sendTo(player,[](Player& target,ll::form::CustomFormResult const& result,ll::form::FormCancelReason) {
-        if(!result) return openMainMenu(target);
-        auto operation=operations[std::min(number(*result,"operation"),operations.size()-1)];
-        auto pattern=input(*result,"pattern"),amount=input(*result,"amount"),height=input(*result,"height");
-        std::string args;
-        if(operation=="hollow") args=amount+" "+pattern;
-        else if(operation=="overlay" || operation=="count") args=pattern;
-        else if(operation=="distr") {}
-        else if(operation=="move" || operation=="stack") {
-            static constexpr std::array directions{"","up","down","north","south","east","west"};
-            args=amount+" "+directions[std::min(number(*result,"direction"),directions.size()-1)];
-            if(number(*result,"air")) args+=" -a";
-            if(number(*result,"select")) args+=" -s";
-        } else {
-            args=pattern+" "+amount;
-            if(operation=="cyl" || operation=="hcyl") args+=" "+height;
-        }
-        executeAdvanced(target,Feedback(target),operation,args);
-    });
-}
+} // namespace
+
 void openTransformMenu(Player& player) {
     ll::form::CustomForm form(text("menu.transform"));
     form.appendDropdown("mode",text("menu.action"),{text("menu.rotate"),text("menu.flip")});
     form.appendInput("y",text("menu.rotation_y"),"90","90");
     form.appendInput("x",text("menu.rotation_x"),"0","0");
     form.appendInput("z",text("menu.rotation_z"),"0","0");
-    form.appendDropdown("axis",text("menu.resize_direction"),{text("menu.dir_east"),text("menu.dir_up"),text("menu.dir_south")});
+    form.appendDropdown("axis",text("menu.resize_direction"),{text("menu.dir_me"),text("menu.dir_east"),text("menu.dir_up"),text("menu.dir_south")});
     form.sendTo(player,[](Player& target,ll::form::CustomFormResult const& result,ll::form::FormCancelReason) {
-        if(!result) return openMainMenu(target);
+        if(!result) return openClipboardRoot(target);
         if(number(*result,"mode")==1) {
-            static constexpr std::array axes{core::Direction::east,core::Direction::up,core::Direction::south};
+            static constexpr std::array axes{core::Direction::me,core::Direction::east,core::Direction::up,core::Direction::south};
             flipClipboard(target,Feedback(target),axes[std::min(number(*result,"axis"),axes.size()-1)]);
         } else {
             std::array<int,3> values{};
@@ -85,24 +55,118 @@ void openTransformMenu(Player& player) {
         }
     });
 }
+namespace {
+void openSchematicBrowser(Player& player, std::string filter = {}, size_t page = 0);
+
+void openSchematicSearch(Player& player, std::string filter) {
+    ll::form::CustomForm form(text("menu.schem_search"));
+    form.appendInput("filter", text("menu.schem_name"), "", filter);
+    form.sendTo(player, [filter = std::move(filter)](
+        Player& target, ll::form::CustomFormResult const& result, ll::form::FormCancelReason
+    ) {
+        openSchematicBrowser(target, result ? input(*result, "filter") : filter);
+    });
+}
+
+void openSchematicFile(Player& player, std::string name, std::string filter, size_t page) {
+    ll::form::SimpleForm form(name);
+    form.appendButton(text("menu.schem_load"));
+    form.appendButton(text("menu.schem_delete"));
+    form.appendButton(text("menu.schem_browse"));
+    form.sendTo(player, [name = std::move(name), filter = std::move(filter), page](
+        Player& target, int selected, ll::form::FormCancelReason
+    ) {
+        if (selected == 0) {
+            if (executeSchematic(target, Feedback(target), "load", name)) return;
+            return openSchematicFile(target, name, filter, page);
+        }
+        if (selected != 1) return openSchematicBrowser(target, filter, page);
+        ll::form::ModalForm confirm(
+            text("menu.schem_delete"), tr("menu.schem_delete_confirm", name),
+            text("menu.confirm_yes"), text("menu.confirm_no")
+        );
+        confirm.sendTo(target, [name, filter, page](Player& p, ll::form::ModalFormResult result, ll::form::FormCancelReason) {
+            if (result == ll::form::ModalFormSelectedButton::Upper && executeSchematic(p, Feedback(p), "delete", name)) {
+                openSchematicBrowser(p, filter, page);
+            } else {
+                openSchematicFile(p, name, filter, page);
+            }
+        });
+    });
+}
+
+void openSchematicBrowser(Player& player, std::string filter, size_t page) {
+    std::vector<std::string> files;
+    try {
+        files = schematic::listFiles(filter);
+    } catch (std::filesystem::filesystem_error const& error) {
+        Feedback(player).error(tr("advanced.failed", error.what()));
+        return openSchematicMenu(player);
+    }
+
+    constexpr size_t pageSize = 12;
+    auto last = files.empty() ? size_t{0} : (files.size() - 1) / pageSize;
+    page = std::min(page, last);
+    ll::form::SimpleForm form(text("menu.schem_browse"),
+        files.empty() ? text("menu.schem_no_results") : tr("menu.schem_page", page + 1, last + 1));
+    auto begin = std::min(page * pageSize, files.size());
+    auto end = std::min(begin + pageSize, files.size());
+    std::vector<std::string> entries;
+    for (size_t i = begin; i < end; ++i) {
+        form.appendButton(files[i]);
+        entries.push_back(std::move(files[i]));
+    }
+    int previous = -2, next = -2;
+    auto row = int(entries.size());
+    if (page > 0) {
+        previous = row++;
+        form.appendButton(text("menu.block_previous"));
+    }
+    if (page < last) {
+        next = row++;
+        form.appendButton(text("menu.block_next"));
+    }
+    auto search = row;
+    form.appendButton(text("menu.schem_search"));
+    form.appendButton(text("menu.schematics"));
+    form.sendTo(player, [entries = std::move(entries), filter = std::move(filter), page, previous, next, search](
+        Player& target, int selected, ll::form::FormCancelReason
+    ) {
+        if (selected >= 0 && size_t(selected) < entries.size()) return openSchematicFile(target, entries[size_t(selected)], filter, page);
+        if (selected >= 0 && selected == previous) return openSchematicBrowser(target, filter, page - 1);
+        if (selected >= 0 && selected == next) return openSchematicBrowser(target, filter, page + 1);
+        if (selected == search) return openSchematicSearch(target, filter);
+        openSchematicMenu(target);
+    });
+}
+
+void openSchematicSave(Player& player, std::string name = {}, size_t format = 0, std::string const& error = {}) {
+    ll::form::CustomForm form(text("menu.schem_save"));
+    if (!error.empty()) form.appendLabel("§c" + error + "§r");
+    form.appendInput("name", text("menu.schem_name"), "house", name);
+    form.appendDropdown("format", text("menu.schem_format"), {"cxs", "mcstructure"}, format);
+    form.sendTo(player, [](Player& target, ll::form::CustomFormResult const& result, ll::form::FormCancelReason) {
+        if (!result) return openSchematicMenu(target);
+        auto name = input(*result, "name");
+        auto format = number(*result, "format") ? 1u : 0u;
+        std::string message;
+        if (!executeSchematic(target, Feedback(target, &message), "save", name, format ? "mcstructure" : "cxs")) {
+            openSchematicSave(target, std::move(name), format, message);
+        }
+    });
+}
+} // namespace
+
 void openSchematicMenu(Player& player) {
-    ll::form::CustomForm form(text("menu.schematics"));
-    form.appendLabel(schematic::list());
-    form.appendDropdown("mode",text("menu.action"),{text("menu.schem_save"),text("menu.schem_load"),text("menu.schem_delete")});
-    form.appendInput("name",text("menu.schem_name"),"house","house");
-    form.appendDropdown("format",text("menu.schem_format"),{"cxs","mcstructure"});
-    form.sendTo(player,[](Player& target,ll::form::CustomFormResult const& result,ll::form::FormCancelReason) {
-        if(!result) return openMainMenu(target);
-        static constexpr std::array modes{"save","load","delete"};
-        auto action=std::string(modes[std::min(number(*result,"mode"),modes.size()-1)]);
-        auto name=input(*result,"name");
-        auto format=number(*result,"format") ? "mcstructure" : "cxs";
-        if(action=="delete") {
-            ll::form::ModalForm confirm(text("menu.schem_delete"),tr("menu.schem_delete_confirm",name),text("menu.confirm_yes"),text("menu.confirm_no"));
-            confirm.sendTo(target,[name,format](Player& p,ll::form::ModalFormResult selected,ll::form::FormCancelReason) {
-                if(selected==ll::form::ModalFormSelectedButton::Upper) executeAdvanced(p,Feedback(p),"schem","delete "+name+" "+format);
-            });
-        } else executeAdvanced(target,Feedback(target),"schem",action+" "+name+" "+format);
+    ll::form::SimpleForm form(text("menu.schematics"));
+    bool canSave = bool(getSession(player).clipboard);
+    form.appendButton(text("menu.schem_browse"));
+    if (canSave) form.appendButton(text("menu.schem_save"));
+    form.appendButton(text("menu.clipboard"));
+    form.sendTo(player, [canSave](Player& target, int selected, ll::form::FormCancelReason) {
+        if (selected == 0) return openSchematicBrowser(target);
+        if (selected == 1 && canSave) return openSchematicSave(target);
+        openClipboardRoot(target);
     });
 }
 
@@ -112,7 +176,7 @@ void openAdjustMenu(Player& player) {
     form.appendInput("amount",text("menu.resize_amount"),"1","1");
     form.appendDropdown("direction",text("menu.resize_direction"),{text("menu.dir_me"),text("menu.dir_up"),text("menu.dir_down"),text("menu.dir_north"),text("menu.dir_south"),text("menu.dir_east"),text("menu.dir_west")});
     form.sendTo(player,[](Player& target,ll::form::CustomFormResult const& result,ll::form::FormCancelReason) {
-        if(!result) return openMainMenu(target);
+        if(!result) return openSelectionRoot(target);
         auto raw=input(*result,"amount");
         int amount=0;
         auto [end,ec]=std::from_chars(raw.data(),raw.data()+raw.size(),amount);
@@ -123,12 +187,7 @@ void openAdjustMenu(Player& player) {
         else {
             static constexpr std::array directions{core::Direction::me,core::Direction::up,core::Direction::down,core::Direction::north,core::Direction::south,core::Direction::east,core::Direction::west};
             auto direction=directions[std::min(number(*result,"direction"),directions.size()-1)];
-            if(direction==core::Direction::me) {
-                auto v=target.getViewVector();
-                if(std::abs(v.y)>=std::max(std::abs(v.x),std::abs(v.z))) direction=v.y>0 ? core::Direction::up : core::Direction::down;
-                else if(std::abs(v.x)>=std::abs(v.z)) direction=v.x>0 ? core::Direction::east : core::Direction::west;
-                else direction=v.z>0 ? core::Direction::south : core::Direction::north;
-            }
+            if(direction==core::Direction::me) direction = facingDirection(target);
             shiftSelection(target,Feedback(target),amount,direction);
         }
     });
@@ -141,7 +200,7 @@ void openCopyOptions(Player& player) {
     form.appendInput("mask",text("menu.mask_input"),"#existing","");
     form.appendInput("pattern",text("menu.cut_pattern"),"air","air");
     form.sendTo(player,[](Player& target,ll::form::CustomFormResult const& result,ll::form::FormCancelReason) {
-        if(!result) return openMainMenu(target);
+        if(!result) return openClipboardRoot(target);
         auto mask=input(*result,"mask"),pattern=input(*result,"pattern");
         copySelection(target,Feedback(target),number(*result,"cut")!=0,pattern.empty() ? std::nullopt : std::optional<std::string_view>(pattern),mask.empty() ? std::nullopt : std::optional<std::string_view>(mask),number(*result,"entities")!=0);
     });
