@@ -1,5 +1,6 @@
 #include "ui/Menu.h"
 #include "ui/AdvancedMenu.h"
+#include "ui/BlockBrowser.h"
 
 #include "command/EditCommands.h"
 #include "command/AdvancedCommands.h"
@@ -149,6 +150,16 @@ struct Choices {
     }
     std::string value(size_t i) const { return i < items.size() ? items[i].value : std::string{}; }
     bool searches(size_t i) const { return i == items.size(); }
+
+    size_t selectedIndex(Values const& values, std::string const& key) const {
+        // Dropdown 回调返回选项文字，需要映射回发送时的选项序号。
+        auto selected = inputText(values, key);
+        if (selected == text("menu.source_search")) return items.size();
+        auto it = std::find_if(items.begin(), items.end(), [&selected](Choice const& choice) {
+            return choice.label == selected;
+        });
+        return it == items.end() ? 0 : size_t(it - items.begin());
+    }
 };
 
 Choices patternChoices(Player& player, std::deque<std::string> const& recent, bool existingOption) {
@@ -175,7 +186,7 @@ std::string pickPattern(Values const& values, std::string const& input, std::str
     auto raw   = inputText(values, input);
     auto typed = trim(raw);
     if (!typed.empty()) return std::string(typed);
-    return c.value(index(values, source));
+    return c.value(c.selectedIndex(values, source));
 }
 
 void openSelectionMenu(Player& player, std::string const& notice = {}, bool error = false);
@@ -339,49 +350,6 @@ void openSelectionMenu(Player& player, std::string const& notice, bool error) {
 
 // ---- 填充 / 替换 ----
 
-using BlockPicked = std::function<void(Player&, std::string)>;
-
-void openBlockSearch(Player& player, BlockPicked picked, std::string query = {});
-
-void openBlockResults(Player& player, BlockPicked picked, std::string query, size_t offset) {
-    constexpr size_t pageSize = 24;
-    auto ids = edit::registeredBlockIds();
-    std::erase_if(ids, [&query](std::string const& id) { return id.find(query) == std::string::npos; });
-
-    SimpleForm form(text("menu.block_search_title"));
-    form.setContent(ids.empty() ? text("menu.block_no_results") : tr("menu.block_results", ids.size()));
-    size_t end = std::min(offset + pageSize, ids.size());
-    for (size_t i = offset; i < end; ++i) {
-        form.appendButton(shortName(ids[i]), [picked, id = ids[i]](Player& p) { picked(p, id); });
-    }
-    if (offset != 0) {
-        form.appendButton(text("menu.block_previous"), [picked, query, offset](Player& p) {
-            openBlockResults(p, picked, query, offset - pageSize);
-        });
-    }
-    if (end < ids.size()) {
-        form.appendButton(text("menu.block_next"), [picked, query, end](Player& p) {
-            openBlockResults(p, picked, query, end);
-        });
-    }
-    form.appendButton(text("menu.block_search_again"), [picked, query](Player& p) { openBlockSearch(p, picked, query); });
-    form.appendButton(text("menu.block_search_back"), [picked](Player& p) { picked(p, {}); });
-    form.sendTo(player);
-}
-
-void openBlockSearch(Player& player, BlockPicked picked, std::string query) {
-    CustomForm form(text("menu.block_search_title"));
-    form.appendInput("query", text("menu.block_search_query"), text("menu.block_search_example"), query);
-    form.setSubmitButton(text("menu.block_search_submit"));
-    form.sendTo(player, [picked = std::move(picked)](Player& p, CustomFormResult const& result, FormCancelReason) {
-        if (!result) return picked(p, {});
-        auto input = inputText(*result, "query");
-        auto query = std::string(trim(input));
-        std::ranges::transform(query, query.begin(), [](unsigned char ch) { return char(std::tolower(ch)); });
-        openBlockResults(p, picked, std::move(query), 0);
-    });
-}
-
 constexpr std::array<std::string_view, 13> buildOperations{
     "sphere", "hsphere", "cyl", "hcyl", "pyramid", "hpyramid", "hollow", "overlay", "center", "move", "stack", "count", "distr"
 };
@@ -434,8 +402,8 @@ void openBuildOperation(
         Player& target, CustomFormResult const& result, FormCancelReason
     ) {
         if (!result) return openBuildMenu(target);
-        if (usesPattern && choices.searches(index(*result, "source"))) {
-            return openBlockSearch(target, [operation, saved = *result](Player& p, std::string id) mutable {
+        if (usesPattern && choices.searches(choices.selectedIndex(*result, "source"))) {
+            return openBlockBrowser(target, [operation, saved = *result](Player& p, std::string id) mutable {
                 if (!id.empty()) saved["pattern"] = std::move(id);
                 openBuildOperation(p, operation, saved);
             });
@@ -473,10 +441,11 @@ void openFillForm(Player& player, size_t shape, std::optional<size_t> source, st
     CustomForm form(text("menu.fill_title"));
     auto       label = selectionSummary(player) + "\n" + text("menu.pattern_hint");
     form.appendLabel(error.empty() ? label : "§c" + error + "§r\n" + label);
+    std::vector<std::string> shapeLabels{text("menu.shape_all"), text("menu.shape_walls"), text("menu.shape_faces")};
     form.appendDropdown(
         "shape",
         text("menu.shape"),
-        {text("menu.shape_all"), text("menu.shape_walls"), text("menu.shape_faces")},
+        shapeLabels,
         std::min<size_t>(shape, 2)
     );
     form.appendDropdown(
@@ -487,14 +456,15 @@ void openFillForm(Player& player, size_t shape, std::optional<size_t> source, st
     );
     form.appendInput("pattern", text("menu.pattern_input"), text("menu.pattern_placeholder"), input);
     form.setSubmitButton(text("menu.fill_submit"));
-    form.sendTo(player, [choices](Player& target, CustomFormResult const& result, FormCancelReason) {
+    form.sendTo(player, [choices, shapeLabels](Player& target, CustomFormResult const& result, FormCancelReason) {
         if (!result) return openMain(target);
         static constexpr std::array shapes{core::BoxShape::all, core::BoxShape::walls, core::BoxShape::faces};
-        auto shapeIndex  = std::min(index(*result, "shape"), shapes.size() - 1);
-        auto sourceIndex = index(*result, "source");
+        auto shape = std::ranges::find(shapeLabels, inputText(*result, "shape"));
+        auto shapeIndex = shape == shapeLabels.end() ? 0 : size_t(shape - shapeLabels.begin());
+        auto sourceIndex = choices.selectedIndex(*result, "source");
         auto typed       = inputText(*result, "pattern");
         if (choices.searches(sourceIndex)) {
-            return openBlockSearch(target, [shapeIndex, typed](Player& p, std::string id) {
+            return openBlockBrowser(target, [shapeIndex, typed](Player& p, std::string id) {
                 openFillForm(p, shapeIndex, 0, id.empty() ? typed : std::move(id));
             });
         }
@@ -527,13 +497,13 @@ void openReplaceForm(Player& player, std::string mask, std::string pattern, std:
         if (!result) return openMain(target);
         auto mask    = pickPattern(*result, "from", "from_source", from);
         auto pattern = pickPattern(*result, "to", "to_source", to);
-        bool searchFrom = from.searches(index(*result, "from_source"));
-        bool searchTo   = to.searches(index(*result, "to_source"));
+        bool searchFrom = from.searches(from.selectedIndex(*result, "from_source"));
+        bool searchTo   = to.searches(to.selectedIndex(*result, "to_source"));
         if (searchFrom || searchTo) {
-            return openBlockSearch(target, [mask, pattern, searchFrom, searchTo](Player& p, std::string id) {
+            return openBlockBrowser(target, [mask, pattern, searchFrom, searchTo](Player& p, std::string id) {
                 if (searchFrom) {
                     if (searchTo && !id.empty()) {
-                        return openBlockSearch(p, [selectedMask = std::move(id), pattern](Player& next, std::string block) {
+                        return openBlockBrowser(p, [selectedMask = std::move(id), pattern](Player& next, std::string block) {
                             openReplaceForm(next, selectedMask, block.empty() ? pattern : std::move(block));
                         });
                     }

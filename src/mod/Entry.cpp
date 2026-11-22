@@ -11,6 +11,7 @@
 #include "visual/PastePreview.h"
 #include "storage/Nbt.h"
 #include "session/PlayerSession.h"
+#include "ui/BlockBrowser.h"
 #include "ll/api/mod/RegisterHelper.h"
 #include <filesystem>
 
@@ -73,6 +74,7 @@ bool Entry::enable() {
 
 bool Entry::disable() {
     getSelf().getLogger().debug("Disabling...");
+    ui::closeBlockBrowsers();
     disableEditCommands();
     disableAdvancedCommands();
     disableEnhancements();
