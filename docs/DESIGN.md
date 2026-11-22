@@ -1,9 +1,9 @@
-# CreatorX 开发文档
+# CreatorX 架构设计草案（归档参考）
 
-> 一个面向 Minecraft 基岩版（LeviLamina）的 WorldEdit 式快速建造模组。
-> 基线：LeviLamina 1.2.0（`lip.toml` 版本 26.60.8，对应 BDS 1.26.60），本仓库模板 `tooth.json` 依赖 `26.60.*`。
-> 头文件来源：`D:\kaifa\LeviLamina-1.2.0\LeviLamina\src`、`src-client`、`src-server`。
-> 功能明细与优先级见 [FEATURES.md](FEATURES.md)。
+> **阅读提示**：本文档记录了项目立项阶段的完整技术架构规划与 Spike 调研笔记。
+> - 想查阅**当前已落地的真实目录结构、核心类职责、NBT 存储布局与本地编译步骤**，请优先阅读 **[第 7 章：开发者与编译指南](07-开发者与编译指南.md)**。
+> - 基线：LeviLamina `26.60.8`（`tooth.json` 依赖 `26.60.*`，对应 BDS `1.26.60`）。
+> - 功能明细与优先级路线见 [FEATURES.md](FEATURES.md)。
 
 ---
 

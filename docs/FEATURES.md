@@ -1,11 +1,11 @@
-# CreatorX 功能清单
+# CreatorX 功能清单与路线图
 
-> 架构与实现细节见 [DESIGN.md](DESIGN.md)。
+> - **最新玩家与服主教程**：请阅读 [README 文档导航](../README.md) 与 [单页命令速查表 USAGE.md](USAGE.md)。
+> - **源码架构与本地编译**：请阅读 [第 7 章：开发者与编译指南](07-开发者与编译指南.md)；早期设计草案见 [DESIGN.md](DESIGN.md)。
 >
-> **优先级**：P0 = MVP 必须；P1 = v0.2–v0.3；P2 = v0.4–v1.0；P3 = 以后再说。
-> **端**：S = 服务端（含单人内置服务端）；C = 仅客户端增强。
-> **风险**：标 ⚠ 的依赖某个 Spike（见 DESIGN.md §15）的结论。
-> 下表使用 `/cx <子命令>`。启用短命令时，已注册的短命令也可以直接输入，例如 `/pos1`、`/set stone`。
+> **状态说明**：标 ✅ 为当前代码已实现可用，标 ⏳ 为后续版本规划项。
+> **优先级**：P0 = MVP 核心；P1 = 进阶核心；P2 = 体验扩展；P3 = 远期探索。
+> **端**：S = 服务端（含单人内置服务端）；C = 客户端增强。
 
 ---
 
@@ -227,16 +227,12 @@
 
 ---
 
-## MVP（v0.1）验收清单
+## 当前已实现核心能力总览
 
-- [x] 模板重命名为 `creatorx`，双目标编译通过
-- [x] `/cx wand`、魔杖左右键、`/cx pos1`、`/cx pos2`、`/cx hpos1`、`/cx hpos2`、`/cx desel`、`/cx size`、`/cx expand`、`/cx contract`
-- [x] `/cx set`、`/cx replace`、`/cx walls`、`/cx faces`
-- [x] `/cx copy`、`/cx cut`、`/cx paste`（含方块实体，无旋转）、`/cx clearclipboard`
-- [x] `/cx undo`、`/cx redo`、`/cx clearhistory`（`/cx undo [n] [玩家]` 的玩家参数未做）
-- [x] 图案：单方块、带状态、加权随机、`hand`；掩码：列表、`!`、`#existing`
-- [x] 分 tick 执行、动作栏进度、`/cx cancel`、大操作确认
-- [x] 限额、黑名单、命令权限（按命令组配置权限未做，统一 OP）
-- [x] 粒子选区可视化
-- [x] 中英文语言文件
-- [ ] 100×100×100 填充期间 TPS ≥ 15，撤销后与原世界逐方块一致（待进游戏实测）
+- [x] **选区与统计**：`/cx wand`、魔杖左右键设点、蹲下右键开菜单、`/cx togglewand`、`pos1`/`pos2`、`hpos1`/`hpos2`、`size`、`desel`、`expand`（含 `vert`）、`contract`、`shift`、`outset`、`inset`、`count`、`distr`（含 `-c` 统计剪贴板）
+- [x] **区域编辑与搬运**：`set`、`replace`、`walls`、`faces`/`outline`、`hollow`、`overlay`、`center`、`move`、`stack`
+- [x] **几何形状生成**：`sphere`/`hsphere`（支持椭球与 `-r` 抬高）、`cyl`/`hcyl`（支持椭圆柱）、`pyramid`/`hpyramid`
+- [x] **剪贴板与变换**：`copy`/`cut`/`paste`（支持 `-a` 跳过空气、`-o` 原位、`-s` 选中、`-p` 假方块预览确认、`-e` 实体拷贝、`-m` 掩码过滤，自动携带含水层与方块实体 NBT）、`rotate`（三维 90° 倍数同步旋转方块状态与实体朝向）、`flip`（对称镜像翻转）、`clearclipboard`
+- [x] **原理图读写**：`/cx schem save|load|list|delete`，完整支持 `.cxs` 与基岩原生 `.mcstructure`
+- [x] **历史持久化与跨玩家回滚**：`undo`/`redo`（支持指定其他在线玩家或离线 UUID）、`history` 历史列表、`clearhistory`、超内存自动异步溢写硬盘、退服/关服持久化保存
+- [x] **全图形化表单与客户端增强**：`/cx menu` 全功能 GUI（内置方块关键词分页搜索、最近 10 条图案/掩码记忆）、`PrimitiveShapesPacket` 实线框与粒子自适应可视化、`F6`–`F10` 客户端快捷键、`creatorx:status` 双端动作栏实时 HUD、`/cx reload` 热重载配置与中英文多语言

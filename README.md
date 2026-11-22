@@ -1,40 +1,64 @@
 # CreatorX
 
-CreatorX 是基于 LeviLamina 的 Minecraft 基岩版WorldEdit 式快速建造模组。提供长方体选区、图形化表单菜单、图案与掩码替换、剪贴板复制粘贴、多步撤销重做、分 tick 异步执行与大操作确认等功能。
+CreatorX 是基于 **LeviLamina** 的 Minecraft 基岩版 WorldEdit 式快速建造模组，同时支持 **专用服务端（BDS）** 与 **Windows 客户端（含单人 / 局域网主机）**。提供长方体选区、图形化表单菜单、方块图案与掩码、剪贴板（旋转 / 翻转 / 粘贴预览 / 实体复制）、几何形状生成、`.cxs` / `.mcstructure` 原理图读写、历史记录与剪贴板落盘持久化、客户端快捷键与动作栏 HUD，以及大范围分 tick 异步调度。
 
-> 详细使用指南见 [docs/USAGE.md](docs/USAGE.md)，功能规划与架构见 [docs/FEATURES.md](docs/FEATURES.md)、[docs/DESIGN.md](docs/DESIGN.md)。
+---
 
-## 快速上手
+## 文档导航
 
-1. 领取魔杖或打开菜单：输入 `/cx wand` 领取选区魔杖，或输入 `/cx menu`（也可以拿着魔杖**蹲下右键**）打开图形化主菜单。
-2. 框选区域：手持魔杖**左键**方块设为点 1，**右键**方块设为点 2；也可用 `/cx pos1`、`/cx pos2` 或 `/cx hpos1`、`/cx hpos2` 设点。
-3. 执行建造：在菜单中选择操作，或执行 `/cx set stone`、`/cx replace dirt grass_block`、`/cx walls glass`、`/cx copy`、`/cx paste`。
-4. 撤销恢复：操作失误可执行 `/cx undo` 撤销、`/cx redo` 重做；大操作执行中可执行 `/cx cancel` 中止。
+为方便按需查阅，项目文档按章节拆分为多份指南：
 
-> 默认需要 OP 权限。启用 `command.shortCommands`（默认开启）后，所有子命令均可省略 `/cx` 前缀（例如 `/pos1`、`/set stone`、`/undo`）。
+| 章节 | 文档路径 | 适合谁看 | 主要内容 |
+| --- | --- | --- | --- |
+| **第 1 章** | [docs/01-快速上手与安装.md](docs/01-快速上手与安装.md) | 新手玩家 / 服主 | 运行场景对比、lip 与手动安装、权限说明、5 分钟第一次建造教程 |
+| **第 2 章** | [docs/02-选区与可视化.md](docs/02-选区与可视化.md) | 所有使用者 | 选区魔杖、脚下/坐标/准星设点、扩展/收缩/平移/外扩/内缩、方块统计与线框可视化 |
+| **第 3 章** | [docs/03-图案掩码与编辑生成.md](docs/03-图案掩码与编辑生成.md) | 建筑师 | 图案（权重随机 / 方块状态 / 手持方块）与掩码语法、填充/替换/四壁/外壳/掏空/表层、移动/堆叠、球体/圆柱/金字塔生成 |
+| **第 4 章** | [docs/04-剪贴板与原理图.md](docs/04-剪贴板与原理图.md) | 建筑师 | 复制/剪切/粘贴、含水层与方块实体/生物实体保留、粘贴假方块预览、三维旋转与镜像翻转、`.cxs` 与 `.mcstructure` 原理图管理 |
+| **第 5 章** | [docs/05-图形菜单与客户端增强.md](docs/05-图形菜单与客户端增强.md) | 触屏 / PC 玩家 | 表单主菜单全页面导览、方块关键词搜索、客户端 `F6`–`F10` 快捷键改键、动作栏实时状态 HUD |
+| **第 6 章** | [docs/06-历史记录配置与服主指南.md](docs/06-历史记录配置与服主指南.md) | 服主 / 管理员 | 多步撤销/重做（含跨玩家管理与磁盘溢写）、分 tick 异步任务调度、`config.jsonc` 全字段详解、热重载与常见问题排查 |
+| **第 7 章** | [docs/07-开发者与编译指南.md](docs/07-开发者与编译指南.md) | 开发者 / 贡献者 | 源码目录结构、核心数据流与持久化格式、Xmake 双端编译步骤 |
+| **汇总手册** | [docs/USAGE.md](docs/USAGE.md) | 速查参考 | 命令总表与核心用法单页速查 |
+| **路线与设计** | [docs/FEATURES.md](docs/FEATURES.md) · [docs/DESIGN.md](docs/DESIGN.md) | 维护者 | 早期功能路线图与架构设计草案 |
 
-## 已实现功能概览
+---
 
-- **选区**：魔杖左右键设点、脚下/坐标设点（`/cx pos1`、`/cx pos2`，支持 `~` `^`）、准星视线设点（`/cx hpos1`、`/cx hpos2`）、尺寸查看（`/cx size`）、清除（`/cx desel`）、扩展/收缩（`/cx expand`、`/cx expand vert`、`/cx contract`）、魔杖开关（`/cx togglewand`）、线框/粒子选区可视化。
-- **区域编辑**：填充（`/cx set`）、替换（`/cx replace`）、四壁（`/cx walls`）、六面外壳（`/cx faces` / `/cx outline`）。
-- **图案与掩码**：支持单方块、方块状态（`wool[color=red]`）、随机权重（`60%stone,40%andesite`）、手持方块（`hand` / `offhand`）、掩码过滤（`!air`、`#existing`、`#solid`、`#air` 与多 Term 空格交集）及拼写纠错提示。
-- **剪贴板**：复制（`/cx copy`）、剪切（`/cx cut [pattern]`）、粘贴（`/cx paste [-a] [-o] [-s]`）、清空（`/cx clearclipboard`），自动保留含水层第二层与箱子/告示牌等方块实体 NBT。
-- **历史记录**：多步撤销（`/cx undo [times]`）、重做（`/cx redo [times]`）、清空历史（`/cx clearhistory`），支持任务中途取消后保留已修改部分的撤销能力。
-- **图形化菜单**：`/cx menu` 或蹲下右键魔杖打开，内置方块关键词搜索、最近 10 条图案/掩码记录、交互式选区调整与确认弹窗，全程无需手打长命令。
-- **性能与安全**：分 tick 预算调度与动作栏进度条、大操作弹窗确认、单次体积与改动上限、禁止放置方块黑名单。
+## 核心特性一览
 
-## 客户端快捷键
+- **选区与统计**：魔杖左右键设点、脚下与相对/局部坐标设点（`/cx pos1`、`/cx pos2`）、准星视线设点（`/cx hpos1`、`/cx hpos2`）、单向/双向扩展收缩（`/cx expand`、`/cx contract`）、平移（`/cx shift`）、六面外扩/内缩（`/cx outset`、`/cx inset`）、方块计数与分布统计（`/cx count`、`/cx distr`），支持选区线框与粒子自动切换。
+- **图案与掩码**：支持单方块、精确方块状态（`wool[color=red]`）、百分比随机混合（`60%stone,40%andesite`）、主副手方块（`hand` / `offhand`）、掩码交并集与取反（`!air`、`#existing`、`#solid`、`#air`），输错方块名自动给出拼写纠错建议。
+- **区域编辑与几何生成**：填充（`/cx set`）、替换（`/cx replace`）、四壁（`/cx walls`）、六面外壳（`/cx faces` / `/cx outline`）、内部掏空（`/cx hollow`）、表层覆盖（`/cx overlay`）、中心点标记（`/cx center`）、选区移动与重复堆叠（`/cx move`、`/cx stack`），以及实心/空心的球体、椭球、圆柱、金字塔生成。
+- **剪贴板与原理图**：复制（`/cx copy`）、剪切（`/cx cut`）、粘贴（`/cx paste`），自动保留含水方块第二层、箱子/告示牌等方块实体 NBT（含大箱子配对修正），可选 `-e` 连同非玩家生物/实体一起复制粘贴；支持 `-p` 假方块粘贴预览、90° 倍数三维旋转（`/cx rotate`，自动换算楼梯/门/原木/铁轨/火把等朝向）与镜像翻转（`/cx flip`）；支持导出与导入 `.cxs` 和原版 `.mcstructure` 原理图（`/cx schem`）。
+- **持久化历史与安全调度**：多步撤销与重做（`/cx undo`、`/cx redo`），支持查看历史列表（`/cx history`）与撤销指定玩家操作；超出内存上限的历史自动溢写至磁盘，重进游戏后历史、剪贴板与个人偏好依然保留；所有大体积操作按区块顺序分 tick 异步执行，配动作栏进度条、大操作弹窗二次确认、单次上限与方块黑名单保护。
+- **全图形化菜单与客户端增强**：`/cx menu` 或手持魔杖**蹲下右键**打开表单，覆盖选区、搜索方块、建造、变换、原理图全流程，手机触屏无需手打长命令；客户端安装后额外提供 `F6`–`F10` 可改键快捷键与动作栏实时状态 HUD。
 
-在客户端安装 CreatorX 后，可在游戏「设置 → 键盘和鼠标」中修改快捷键（自带本地化名称资源包 `creatorx_shortcuts`）。联机时需服务端同样安装 CreatorX 且玩家拥有执行 `/cx` 的权限。
+---
 
-| 默认按键 | 对应命令 | 操作 |
-| --- | --- | --- |
-| `F6` | `/cx hpos1` | 将准星指向的方块设为选区点 1 |
-| `F7` | `/cx hpos2` | 将准星指向的方块设为选区点 2 |
-| `F8` | `/cx undo` | 撤销上一步 |
-| `F9` | `/cx redo` | 重做上一步 |
-| `F10` | `/cx menu` | 打开 CreatorX 主菜单 |
+## 30 秒快速体验
+
+1. **领取魔杖**：进入游戏（需 OP 权限），输入 `/cx wand` 领取选区魔杖，或输入 `/cx menu`（也可手持魔杖**蹲下右键**）打开图形菜单。
+2. **框选区域**：手持魔杖**左键点击**一个方块设为点 1，**右键点击**对角方块设为点 2，周围会出现绿色选区边框。
+3. **执行建造**：输入 `/cx set 60%stone_bricks,40%mossy_stone_bricks` 填充混合石砖，或在菜单中点选操作。
+4. **随时反悔**：输入 `/cx undo` 撤销上一步，`/cx redo` 重做；大任务进行中可输入 `/cx cancel` 随时中止。
+
+> 默认开启短命令（`command.shortCommands: true`），所有子命令均可省略 `/cx` 直接输入，例如 `/wand`、`/pos1`、`/set stone`、`/copy`、`/paste -p`、`/undo`。
+
+---
+
+## 环境要求与快速安装
+
+- **运行环境**：Windows x64，Minecraft 基岩版 / BDS `1.26.60`（对应 **LeviLamina `26.60.*`**）。
+- **使用 lip 安装**：
+  ```powershell
+  # 专用服务端（BDS）安装
+  lip install github.com/yangyangzhong82/CreatorX
+
+  # Windows 客户端安装
+  lip install github.com/yangyangzhong82/CreatorX#client
+  ```
+- 详细手动安装目录、联机双端搭配说明见 [第 1 章：快速上手与安装](docs/01-快速上手与安装.md)。
+
+---
 
 ## License
 
-CC0-1.0 © LeviMC (LiteLDev)
+[CC0-1.0](LICENSE) © LeviMC (LiteLDev)
