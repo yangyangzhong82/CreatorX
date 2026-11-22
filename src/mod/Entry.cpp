@@ -3,9 +3,13 @@
 #include "Config/ConfigManager.h"
 #include "I18n/I18n.h"
 #include "command/EditCommands.h"
+#include "command/AdvancedCommands.h"
 #include "command/SelectionCommands.h"
 #include "exec/JobScheduler.h"
 #include "input/Shortcuts.h"
+#include "net/Enhancements.h"
+#include "visual/PastePreview.h"
+#include "storage/Nbt.h"
 #include "session/PlayerSession.h"
 #include "ll/api/mod/RegisterHelper.h"
 #include <filesystem>
@@ -49,6 +53,7 @@ bool Entry::load() {
     // 原版初始化键盘布局时会读取已注册的快捷键。
     registerShortcuts();
 #endif
+    registerEnhancementProtocol();
     logger.info(tr("mod.loaded"));
     return true;
 }
@@ -59,6 +64,9 @@ bool Entry::enable() {
     exec::enableScheduler();
     enableSelectionCommands();
     enableEditCommands();
+    enableAdvancedCommands();
+    enableEnhancements();
+    enablePreviews();
     logger.info(tr("mod.enabled"));
     return true;
 }
@@ -66,16 +74,21 @@ bool Entry::enable() {
 bool Entry::disable() {
     getSelf().getLogger().debug("Disabling...");
     disableEditCommands();
+    disableAdvancedCommands();
+    disableEnhancements();
+    disablePreviews();
     disableSelectionCommands();
     // 先结束任务（会把已完成的改动写入历史），再丢弃会话。
     exec::disableScheduler();
     disableSessions();
+    storage::stopStorage();
     logger.info(tr("mod.unloaded"));
     return true;
 }
 
 bool Entry::unload() {
     getSelf().getLogger().debug("Unloading...");
+    unregisterEnhancementProtocol();
     return true;
 }
 

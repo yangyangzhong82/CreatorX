@@ -2,6 +2,7 @@
 
 #include "core/region/CuboidSelection.h"
 #include "mod/Global.h"
+#include "net/Enhancements.h"
 
 #include "mc/network/MinecraftPackets.h"
 #include "mc/network/packet/PrimitiveShapeDataPayload.h"
@@ -65,7 +66,7 @@ void showParticleEdge(
 
 } // namespace
 
-void showSelectionOutline(Player const& player, core::CuboidSelection const& selection) {
+void showSelectionOutline(Player const& player, core::CuboidSelection const& selection, bool preview) {
     if (config.visual.mode == "none" || config.visual.maxDistance <= 0 || !selection.first || !selection.second) {
         return;
     }
@@ -77,7 +78,7 @@ void showSelectionOutline(Player const& player, core::CuboidSelection const& sel
     std::array<double, 3> viewer{position.x, position.y, position.z};
     double                distance  = config.visual.maxDistance;
     auto                  dimension = player.getDimensionId();
-    bool                  particles = config.visual.mode == "particles";
+    bool                  particles = config.visual.mode == "particles" || (config.visual.mode == "auto" && !hasEnhancedClient(player));
     std::vector<PrimitiveShapeDataPayload> shapes;
     if (!particles) shapes.reserve(12);
 
@@ -107,7 +108,7 @@ void showSelectionOutline(Player const& player, core::CuboidSelection const& sel
                 Vec3 start{sample[0], sample[1], sample[2]};
                 sample[axis] = static_cast<float>(end);
                 Vec3 finish{sample[0], sample[1], sample[2]};
-                shapes.push_back(selectionLine(axis * 4 + side, dimension, start, finish));
+                shapes.push_back(selectionLine(axis * 4 + side + (preview ? 16 : 0), dimension, start, finish));
             }
         }
     }
@@ -118,6 +119,19 @@ void showSelectionOutline(Player const& player, core::CuboidSelection const& sel
         *outline.mShapes = std::move(shapes);
         outline.sendTo(player);
     }
+}
+
+void clearSelectionOutline(Player const& player, bool preview) {
+    auto packet=MinecraftPackets::createPacket(MinecraftPacketIds::PrimitiveShapesPacket);
+    auto& outline=static_cast<PrimitiveShapesPacket&>(*packet);
+    std::vector<PrimitiveShapeDataPayload> shapes;
+    for(uint64 edge=0;edge<12;++edge) {
+        auto shape=selectionLine(edge+(preview ? 16 : 0),player.getDimensionId(),{0,0,0},{0,0,0});
+        *shape.mTimeLeftTotalSec=0.0f;
+        shapes.push_back(std::move(shape));
+    }
+    *outline.mShapes=std::move(shapes);
+    outline.sendTo(player);
 }
 
 } // namespace creatorx

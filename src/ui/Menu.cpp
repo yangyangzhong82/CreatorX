@@ -1,6 +1,9 @@
 #include "ui/Menu.h"
+#include "ui/AdvancedMenu.h"
 
 #include "command/EditCommands.h"
+#include "command/AdvancedCommands.h"
+#include "schematic/Schematic.h"
 #include "command/SelectionCommands.h"
 #include "edit/Pattern.h"
 #include "exec/JobScheduler.h"
@@ -318,6 +321,7 @@ void openSelectionMenu(Player& player, std::string const& notice, bool error) {
         if (!hasSelection(p)) return openSelectionMenu(p, text("menu.need_selection"), true);
         openResizeForm(p);
     });
+    addButton(form,"menu.adjust_selection",icon::selection,[](Player& p) {openAdjustMenu(p);});
     addButton(form, "menu.expand_vert", icon::selection, [](Player& p) {
         selectionAction(p, [&](Feedback const& out) { return expandVertically(p, out); });
     });
@@ -470,14 +474,21 @@ void openPasteForm(Player& player) {
     form.appendToggle("skipAir", text("menu.paste_skip_air"), true);
     form.appendToggle("original", text("menu.paste_original"), false);
     form.appendToggle("select", text("menu.paste_select"), true);
+    form.appendToggle("preview", text("menu.paste_preview"), true);
+    form.appendToggle("entities",text("menu.copy_entities"),false);
+    form.appendInput("mask",text("menu.mask_input"),"#existing","");
     form.setSubmitButton(text("menu.paste_submit"));
     form.sendTo(player, [](Player& target, CustomFormResult const& result, FormCancelReason) {
         if (!result) return openClipboardMenu(target);
         PasteOptions options{
             number(*result, "skipAir") != 0,
             number(*result, "original") != 0,
-            number(*result, "select") != 0
+            number(*result, "select") != 0,
+            number(*result, "preview") != 0,
+            number(*result,"entities")!=0
         };
+        auto mask=inputText(*result,"mask");
+        if(!mask.empty()) options.mask=std::move(mask);
         std::string message;
         if (!pasteClipboard(target, Feedback(target, &message), options)) openClipboardMenu(target, message, true);
     });
@@ -491,9 +502,12 @@ void openClipboardMenu(Player& player, std::string const& notice, bool error) {
         if (!copySelection(p, Feedback(p, &message), cut, std::nullopt)) openClipboardMenu(p, message, true);
     };
     addButton(form, "menu.copy", icon::clipboard, [run](Player& p) { run(p, false); });
+    addButton(form,"menu.copy_options",icon::clipboard,[](Player& p) {openCopyOptions(p);});
     addButton(form, "menu.cut", icon::clipboard, [run](Player& p) { run(p, true); });
     if (session.clipboard) {
         addButton(form, "menu.paste", icon::clipboard, [](Player& p) { openPasteForm(p); });
+    addButton(form,"menu.transform",icon::clipboard,[](Player& p) {openTransformMenu(p);});
+    addButton(form,"menu.schematics",icon::clipboard,[](Player& p) {openSchematicMenu(p);});
         addButton(form, "menu.clear_clipboard", icon::cancel, [](Player& p) {
             clearClipboard(p, Feedback(p));
             openClipboardMenu(p);
@@ -528,7 +542,7 @@ void historyStep(Player& player, bool undo) {
 
 void openHistoryMenu(Player& player, std::string const& notice, bool error) {
     auto& history = getSession(player).history;
-    SimpleForm form(text("menu.history_title"), withNotice(notice, error, historySummary(getSession(player))));
+    SimpleForm form(text("menu.history_title"), withNotice(notice, error, getSession(player).history.describe()));
     if (history.undoCount()) addButton(form, "menu.undo_one", icon::undo, [](Player& p) { historyStep(p, true); });
     if (history.redoCount()) addButton(form, "menu.redo_one", icon::undo, [](Player& p) { historyStep(p, false); });
     if (history.undoCount() > 1) {
@@ -564,6 +578,7 @@ void openSettingsMenu(Player& player) {
         giveWand(p, Feedback(p));
         openSettingsMenu(p);
     });
+    addButton(form,"menu.reload",icon::settings,[](Player& p) {reloadConfiguration(Feedback(p));});
     form.appendButton(
         text(session.wandEnabled ? "menu.wand_on" : "menu.wand_off"),
         icon::selection,
@@ -602,6 +617,7 @@ void openMain(Player& player, std::string const& notice, bool error) {
     SimpleForm form(text("menu.title"), withNotice(notice, error, status));
     addButton(form, "menu.selection", icon::selection, [](Player& p) { openSelectionMenu(p); });
     addButton(form, "menu.fill", icon::fill, [](Player& p) { openFillForm(p); });
+    addButton(form,"menu.build",icon::fill,[](Player& p) {openBuildMenu(p);});
     addButton(form, "menu.replace", icon::replace, [](Player& p) { openReplaceForm(p); });
     addButton(form, "menu.clipboard", icon::clipboard, [](Player& p) { openClipboardMenu(p); });
     if (session.history.undoCount()) {

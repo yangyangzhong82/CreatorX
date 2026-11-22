@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <functional>
 
 namespace creatorx::edit {
 
@@ -20,7 +21,8 @@ std::unique_ptr<exec::Job> makeRegionEdit(
     core::Box           box,
     core::BoxShape      shape,
     Pattern             pattern,
-    std::optional<Mask> mask
+    std::optional<Mask> mask,
+    std::vector<CompoundTag> removedActors = {}
 );
 
 // 复制选区到剪贴板；cutPattern 有值时复制完成后再用它填充选区（剪切）。
@@ -29,13 +31,21 @@ std::unique_ptr<exec::Job> makeCopy(
     int                    dimension,
     core::Box              box,
     core::Vec3i            offset,
-    std::optional<Pattern> cutPattern
+    std::optional<Pattern> cutPattern,
+    std::optional<Mask> mask = {},
+    bool includeEntities = false
 );
 
 std::unique_ptr<exec::Job>
-makePaste(mce::UUID owner, int dimension, std::shared_ptr<Clipboard const> clipboard, core::Vec3i min, bool skipAir);
+makePaste(mce::UUID owner, int dimension, std::shared_ptr<Clipboard const> clipboard, core::Vec3i min, bool skipAir, std::optional<Mask> mask = {}, bool includeEntities = false);
 
 // 撤销或重做 sets（按弹出顺序处理）；中途取消时未写回的部分退回原来的栈。
-std::unique_ptr<exec::Job> makeHistory(mce::UUID owner, bool undo, std::vector<ChangeSet> sets);
+std::unique_ptr<exec::Job> makeHistory(mce::UUID owner, bool undo, std::vector<ChangeSet> sets, mce::UUID requester);
+
+using EditFilter = std::function<bool(BlockSource&, core::Vec3i)>;
+std::unique_ptr<exec::Job> makeComputedEdit(mce::UUID owner, int dimension, core::Box box, Pattern pattern, EditFilter filter, std::string label);
+std::unique_ptr<exec::Job> makeInspect(mce::UUID owner, int dimension, core::Box box, std::optional<Mask> mask);
+std::unique_ptr<exec::Job> makeClipboardInspect(mce::UUID owner,std::shared_ptr<Clipboard const> clipboard);
+std::unique_ptr<exec::Job> makeTransfer(mce::UUID owner, int dimension, core::Box source, core::Vec3i offset, int copies, bool move, bool skipAir);
 
 } // namespace creatorx::edit

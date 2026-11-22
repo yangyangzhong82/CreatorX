@@ -31,6 +31,9 @@ bool resizeSelection(
     core::Direction direction
 );
 bool expandVertically(Player& player, Feedback const& output);
+bool shiftSelection(Player& player, Feedback const& output, int amount, core::Direction direction);
+bool outsetSelection(Player& player, Feedback const& output, int amount, bool horizontal, bool vertical);
+bool insetSelection(Player& player, Feedback const& output, int amount);
 void clearSelection(Player& player, Feedback const& output);
 bool giveWand(Player& player, Feedback const& output);
 void toggleWand(Player& player, Feedback const& output);

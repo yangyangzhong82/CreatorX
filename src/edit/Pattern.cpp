@@ -16,6 +16,8 @@
 
 namespace creatorx::edit {
 namespace {
+std::unordered_set<std::string> deniedBlocks;
+bool blacklistReady=false;
 
 std::string_view trim(std::string_view text) {
     auto begin = text.find_first_not_of(" \t");
@@ -180,12 +182,14 @@ Block const& airBlock() {
 }
 
 bool isDisallowed(Block const& block) {
-    static auto names = [] {
-        std::unordered_set<std::string> result;
-        for (auto const& name : config.limits.disallowedBlocks) result.insert(normalizeName(name));
-        return result;
-    }();
-    return names.contains(block.getTypeName());
+    if(!blacklistReady) refreshBlockBlacklist();
+    return deniedBlocks.contains(block.getTypeName());
+}
+
+void refreshBlockBlacklist() {
+    deniedBlocks.clear();
+    for(auto const& name:config.limits.disallowedBlocks) deniedBlocks.insert(normalizeName(name));
+    blacklistReady=true;
 }
 
 std::vector<std::string> registeredBlockIds() {

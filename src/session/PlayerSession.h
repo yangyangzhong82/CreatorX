@@ -24,6 +24,7 @@ struct WandClick {
 };
 
 struct PlayerSession {
+    std::string world;
     int                                    dimension{};
     core::CuboidSelection                  cuboid;
     bool                                   wandEnabled = true;
@@ -40,8 +41,11 @@ struct PlayerSession {
 void rememberRecent(std::deque<std::string>& list, std::string_view text);
 
 PlayerSession& getSession(Player const& player);
+PlayerSession& getSession(mce::UUID const& uuid);
 PlayerSession* findSession(mce::UUID const& uuid);
 bool           hasSessions();
+void saveSession(mce::UUID const& uuid);
+void saveClipboard(mce::UUID const& uuid);
 
 // 玩家退出时先结束其任务，再丢弃会话。
 void enableSessions();

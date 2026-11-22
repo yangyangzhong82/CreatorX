@@ -15,6 +15,7 @@ Block const& airBlock();
 
 // 配置 limits.disallowedBlocks 中禁止通过 CreatorX 放置的方块。
 bool isDisallowed(Block const& block);
+void refreshBlockBlacklist();
 
 std::vector<std::string> registeredBlockIds();
 

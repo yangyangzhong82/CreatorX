@@ -3,6 +3,7 @@
 #include "I18n/I18n.h"
 #include "mod/Global.h"
 #include <Windows.h>
+#include <algorithm>
 #include <exception>
 #include <filesystem>
 #include <fmt/std.h>
@@ -19,6 +20,27 @@
 namespace creatorx {
 
 namespace {
+
+void normalizeConfig(Config& value) {
+    value.limits.maxSelectionVolume = std::max<std::uint64_t>(value.limits.maxSelectionVolume, 1);
+    value.limits.maxChangesPerOperation = std::max<std::uint64_t>(value.limits.maxChangesPerOperation, 1);
+    value.limits.confirmThreshold = std::min(value.limits.confirmThreshold, value.limits.maxChangesPerOperation);
+    value.performance.blocksPerTick = std::max<std::uint64_t>(value.performance.blocksPerTick, 1);
+    value.performance.tickBudgetMs = std::clamp(value.performance.tickBudgetMs, 0.1f, 100.0f);
+    value.performance.maxConcurrentJobs = std::max(value.performance.maxConcurrentJobs, 1u);
+    value.history.size = std::max<std::size_t>(value.history.size, 1);
+    value.history.maxBlocksInMemory = std::max<std::size_t>(value.history.maxBlocksInMemory, 1);
+    value.selection.traceDistance = std::clamp(value.selection.traceDistance, 1.0f, 512.0f);
+    value.visual.maxDistance = std::clamp(value.visual.maxDistance, 0.0f, 512.0f);
+    value.visual.previewMaxBlocks=std::clamp(value.visual.previewMaxBlocks,0u,32768u);
+    value.visual.previewSeconds=std::clamp(value.visual.previewSeconds,5u,120u);
+    if (value.visual.mode != "auto" && value.visual.mode != "shapes" && value.visual.mode != "particles"
+        && value.visual.mode != "none") {
+        value.visual.mode = "auto";
+    }
+    if (value.visual.particle.empty()) value.visual.particle = "minecraft:villager_happy";
+    if (value.wand.item.empty()) value.wand.item = "minecraft:wooden_axe";
+}
 
 struct RootObjectRange {
     size_t openBrace;
@@ -203,6 +225,7 @@ bool ConfigManager::load(const std::filesystem::path& path) {
     std::ifstream file(path);
     if (!file.is_open()) {
         // 文件不存在，创建默认配置
+        normalizeConfig(*mConfig);
         logger.info(tr("config.not_found", path));
         if (!save()) {
             return false;
@@ -220,6 +243,7 @@ bool ConfigManager::load(const std::filesystem::path& path) {
         user_json = nlohmann::json::parse(content, nullptr, true, true);
         // 填充内存中的配置对象。缺失的键将从结构体定义中获取默认值。
         *mConfig = user_json.get<Config>();
+        normalizeConfig(*mConfig);
     } catch (const nlohmann::json::exception& e) {
         logger.error(tr("config.parse_error", e.what()));
         return false;
@@ -270,6 +294,11 @@ bool ConfigManager::load(const std::filesystem::path& path) {
     logger.setLevel(mConfig->logLevel);
 
     return true;
+}
+
+bool ConfigManager::reload() {
+    if (mConfigPath.empty()) return false;
+    return load(mConfigPath);
 }
 
 bool ConfigManager::save() {

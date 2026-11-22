@@ -7,6 +7,9 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
+#include <filesystem>
+#include <string>
+#include <future>
 
 class Block;
 class BlockSource;
@@ -20,8 +23,19 @@ public:
     explicit ChangeSet(int dimension);
 
     int    dimension() const { return mDimension; }
-    size_t size() const { return mEntries.size(); }
-    bool   empty() const { return mEntries.empty(); }
+    size_t size() const { return mDiskPath.empty() ? mEntries.size()+mActors.size() : mStoredSize; }
+    bool   empty() const { return size() == 0; }
+    size_t residentSize() const { return mEntries.size()+mActors.size(); }
+    bool trySpill();
+    void ensureLoaded();
+    void persist();
+    CompoundTag reference();
+    static ChangeSet fromReference(CompoundTag const& tag);
+    std::shared_future<void> pendingWrite() const {return mWrite;}
+    CompoundTag serialize() const;
+    static ChangeSet deserialize(CompoundTag const& tag);
+    std::string label = "edit";
+    std::int64_t created = 0;
 
     void record(
         core::Vec3i                  pos,
@@ -32,11 +46,12 @@ public:
         Block const&                 newExtra,
         CompoundTag const*           newEntity
     );
+    void recordActor(core::Vec3i pos, std::int64_t id, CompoundTag tag, bool added);
 
     // 把第 index 条改动写回世界：undo 为 true 时写旧值，否则写新值。
-    void apply(BlockSource& region, size_t index, bool undo) const;
+    void apply(BlockSource& region, size_t index, bool undo);
 
-    core::Vec3i position(size_t index) const { return mEntries[index].pos; }
+    core::Vec3i position(size_t index) const { return index<mEntries.size() ? mEntries[index].pos : mActors[index-mEntries.size()].pos; }
 
     // 截下 [from, size) 作为新的 ChangeSet 返回，本对象保留 [0, from)。
     ChangeSet splitTail(size_t from);
@@ -59,6 +74,16 @@ private:
     int                   mDimension;
     std::shared_ptr<Pool> mPool;
     std::vector<Entry>    mEntries;
+    struct ActorEntry {
+        core::Vec3i pos;
+        std::int64_t id;
+        bool added;
+        std::shared_ptr<CompoundTag const> tag;
+    };
+    std::vector<ActorEntry> mActors;
+    std::filesystem::path mDiskPath;
+    size_t mStoredSize = 0;
+    std::shared_future<void> mWrite;
 };
 
 // 写入一个方块（含第二层与方块实体）。changes 非空时记录旧值。返回是否真的改动了世界。
@@ -87,12 +112,18 @@ public:
     size_t undoCount() const { return mUndo.size(); }
     size_t redoCount() const { return mRedo.size(); }
     void   clear();
+    CompoundTag serialize();
+    void deserialize(CompoundTag const& tag);
+    void pollSpills() { if (mSpillPending) trim(); }
+    std::string describe() const;
+    std::vector<std::shared_future<void>> pendingWrites() const;
 
 private:
     void trim();
 
     std::deque<ChangeSet> mUndo;
     std::deque<ChangeSet> mRedo;
+    bool mSpillPending = false;
 };
 
 } // namespace creatorx::edit

@@ -56,7 +56,7 @@ BlockSource* regionOf(Level& level, int dimension);
 
 // 提交任务。每个玩家同时只能有一个任务；失败时 error 为原因。
 bool canSubmit(mce::UUID const& uuid, std::string& error);
-bool submitJob(Player& player, std::unique_ptr<Job> job, std::string& error);
+bool submitJob(Player& player, std::unique_ptr<Job> job, std::string& error, std::optional<mce::UUID> owner = {});
 bool hasJob(mce::UUID const& uuid);
 // 玩家当前任务的进度百分比；没有任务时为空。
 std::optional<unsigned> jobPercent(mce::UUID const& uuid);

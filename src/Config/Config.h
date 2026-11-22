@@ -52,6 +52,13 @@ struct VisualConfig {
     std::string mode        = "auto";
     float       maxDistance = 128.0f;
     std::string particle    = "minecraft:villager_happy";
+    unsigned previewMaxBlocks = 4096;
+    unsigned previewSeconds = 30;
+};
+
+struct ClientConfig {
+    bool hud = true;
+    bool localCoordinates = true;
 };
 
 struct Config {
@@ -65,6 +72,7 @@ struct Config {
     SelectionConfig   selection{};
     WandConfig        wand{};
     VisualConfig      visual{};
+    ClientConfig      client{};
 };
 
 template <>
@@ -81,6 +89,8 @@ template <>
 struct is_reflectable<WandConfig> : std::true_type {};
 template <>
 struct is_reflectable<VisualConfig> : std::true_type {};
+template <>
+struct is_reflectable<ClientConfig> : std::true_type {};
 template <>
 struct is_reflectable<Config> : std::true_type {};
 

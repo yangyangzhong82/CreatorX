@@ -8,6 +8,7 @@ namespace core {
 struct CuboidSelection;
 }
 
-void showSelectionOutline(Player const& player, core::CuboidSelection const& selection);
+void showSelectionOutline(Player const& player, core::CuboidSelection const& selection, bool preview = false);
+void clearSelectionOutline(Player const& player, bool preview = false);
 
 } // namespace creatorx

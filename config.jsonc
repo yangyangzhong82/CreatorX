@@ -41,7 +41,7 @@
     "history": {
         // 每位玩家保留的撤销记录条数。
         "size": 30,
-        // 每位玩家撤销记录合计保留的方块数，超出时丢弃最早的记录。
+        // 每位玩家在内存中保留的历史方块数，超出部分写入磁盘。
         "maxBlocksInMemory": 5000000
     },
     "selection": {
@@ -57,9 +57,19 @@
         "sneakOpensMenu": true
     },
     "visual": {
-        // auto 或 shapes 显示线框，particles 显示粒子，none 关闭显示。
+        // auto 为支持增强协议的客户端显示线框，其余使用粒子；shapes 强制线框，none 关闭。
         "mode": "auto",
         "maxDistance": 128.0,
-        "particle": "minecraft:villager_happy"
+        "particle": "minecraft:villager_happy",
+        // 小于此体积的粘贴预览发送假方块，较大的预览只显示边界。
+        "previewMaxBlocks": 4096,
+        // 预览有效秒数，超时后恢复客户端方块。
+        "previewSeconds": 30
+    },
+    "client": {
+        // 启用客户端动作栏 HUD。
+        "hud": true,
+        // 远程服务器未安装 CreatorX 时显示本地坐标。
+        "localCoordinates": true
     }
 }

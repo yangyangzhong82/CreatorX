@@ -22,6 +22,7 @@
 #include "mc/server/commands/CommandOrigin.h"
 #include "mc/server/commands/CommandOutput.h"
 #include "mc/server/commands/CommandPosition.h"
+#include "mc/server/commands/CommandRawText.h"
 #include "mc/world/gamemode/GameMode.h"
 #include "mc/world/item/ItemStack.h"
 #include "mc/world/level/dimension/Dimension.h"
@@ -51,10 +52,21 @@ struct VerticalParams {
     VerticalExpansion direction;
 };
 
+struct ShiftParams {
+    int                             amount;
+    ll::command::Optional<core::Direction> direction;
+};
+
+struct AmountParams {
+    int amount;
+    ll::command::Optional<CommandRawText> flags;
+};
+
 namespace {
 
-constexpr std::array<std::string_view, 10>
-    commandNames{"pos1", "pos2", "hpos1", "hpos2", "size", "desel", "wand", "togglewand", "expand", "contract"};
+constexpr std::array<std::string_view, 13> commandNames{
+    "pos1", "pos2", "hpos1", "hpos2", "size", "desel", "wand", "togglewand", "expand", "contract", "shift", "outset", "inset"
+};
 constexpr auto         wandTag = "creatorx:selection_wand";
 ll::event::ListenerPtr registerListener;
 ll::event::ListenerPtr destroyListener;
@@ -210,6 +222,42 @@ void registerSelectionCommand(ll::command::CommandHandle& handle, std::string_vi
             });
         return;
     }
+    if (name == "shift") {
+        auto overload = handle.overload<ShiftParams>();
+        if (subcommand) (void)overload.text(name);
+        overload.required("amount").optional("direction").execute([](CommandOrigin const& origin, CommandOutput& output, ShiftParams const& args) {
+            if (auto* player = getCommandPlayer(origin, output)) {
+                auto direction = args.direction.value_or(core::Direction::me);
+                if (direction == core::Direction::me) direction = facingDirection(*player);
+                shiftSelection(*player, output, args.amount, direction);
+            }
+        });
+        return;
+    }
+    if (name == "outset" || name == "inset") {
+        auto overload = handle.overload<AmountParams>();
+        if (subcommand) (void)overload.text(name);
+        overload.required("amount").optional("flags").execute([name](CommandOrigin const& origin, CommandOutput& output, AmountParams const& args) {
+            if (auto* player = getCommandPlayer(origin, output)) {
+                auto flag=args.flags ? std::string_view(args.flags->mText) : std::string_view{};
+                if(!flag.empty() && flag!="-h" && flag!="-v") {output.error(tr("selection.outset_usage"));return;}
+                if (name == "inset") {
+                    if(flag.empty()) insetSelection(*player, output, args.amount);
+                    else {
+                        auto selection=completeSelection(*player,output);
+                        if(!selection) return;
+                        auto candidate=*selection;
+                        bool ok=args.amount>=0;
+                        if(flag!="-v") ok=ok && candidate.resize(core::Direction::east,args.amount,args.amount,true) && candidate.resize(core::Direction::south,args.amount,args.amount,true);
+                        if(flag!="-h") ok=ok && candidate.resize(core::Direction::up,args.amount,args.amount,true);
+                        if(!ok) output.error(tr("selection.contract_empty"));
+                        else commitResize(*player,output,*selection,candidate);
+                    }
+                } else outsetSelection(*player, output, args.amount, flag!="-v", flag!="-h");
+            }
+        });
+        return;
+    }
     auto overload = handle.overload();
     if (subcommand) (void)overload.text(name);
     overload.execute([name](CommandOrigin const& origin, CommandOutput& output) {
@@ -359,7 +407,81 @@ bool expandVertically(Player& player, Feedback const& output) {
     return commitResize(player, output, *selection, candidate);
 }
 
+bool shiftSelection(Player& player, Feedback const& output, int amount, core::Direction direction) {
+    auto* selection = completeSelection(player, output);
+    if (!selection) return false;
+    if (amount < 0 || direction == core::Direction::me) {
+        output.error(tr("selection.shift_invalid"));
+        return false;
+    }
+    core::Vec3i delta{};
+    switch (direction) {
+    case core::Direction::north: delta.z = -amount; break;
+    case core::Direction::south: delta.z = amount; break;
+    case core::Direction::east: delta.x = amount; break;
+    case core::Direction::west: delta.x = -amount; break;
+    case core::Direction::up: delta.y = amount; break;
+    case core::Direction::down: delta.y = -amount; break;
+    case core::Direction::me: return false;
+    }
+    auto candidate = *selection;
+    for(auto point:{*candidate.first,*candidate.second}) {
+        for(auto [coordinate,offset]:{std::pair{point.x,delta.x},std::pair{point.y,delta.y},std::pair{point.z,delta.z}}) {
+            auto moved=std::int64_t(coordinate)+offset;
+            if(moved<std::numeric_limits<int>::min() || moved>std::numeric_limits<int>::max()) {output.error(tr("selection.expand_range"));return false;}
+        }
+    }
+    candidate.first = *candidate.first + delta;
+    candidate.second = *candidate.second + delta;
+    if (!candidate.size()->fits(config.limits.maxSelectionVolume)) {
+        output.error(tr("selection.too_large", config.limits.maxSelectionVolume));
+        return false;
+    }
+    *selection = candidate;
+    refreshOutline(player, getSession(player));
+    showSize(candidate, output);
+    return true;
+}
+
+bool outsetSelection(Player& player, Feedback const& output, int amount, bool horizontal, bool vertical) {
+    auto* selection = completeSelection(player, output);
+    if (!selection || amount < 0 || (!horizontal && !vertical)) {
+        output.error(tr("selection.resize_amount"));
+        return false;
+    }
+    auto candidate = *selection;
+    if (horizontal) {
+        if (!candidate.resize(core::Direction::east, amount, amount, false)
+            || !candidate.resize(core::Direction::south, amount, amount, false)) {
+            output.error(tr("selection.expand_range"));
+            return false;
+        }
+    }
+    if (vertical && !candidate.resize(core::Direction::up, amount, amount, false)) {
+        output.error(tr("selection.expand_range"));
+        return false;
+    }
+    return commitResize(player, output, *selection, candidate);
+}
+
+bool insetSelection(Player& player, Feedback const& output, int amount) {
+    auto* selection = completeSelection(player, output);
+    if (!selection || amount < 0) {
+        output.error(tr("selection.resize_amount"));
+        return false;
+    }
+    auto candidate = *selection;
+    if (!candidate.resize(core::Direction::east, amount, amount, true)
+        || !candidate.resize(core::Direction::south, amount, amount, true)
+        || !candidate.resize(core::Direction::up, amount, amount, true)) {
+        output.error(tr("selection.contract_empty"));
+        return false;
+    }
+    return commitResize(player, output, *selection, candidate);
+}
+
 void clearSelection(Player& player, Feedback const& output) {
+    clearSelectionOutline(player);
     if (auto* session = findSession(player.getUuid())) {
         session->cuboid = {};
         session->lastLeftClick.reset();
@@ -390,12 +512,15 @@ bool giveWand(Player& player, Feedback const& output) {
 void toggleWand(Player& player, Feedback const& output) {
     auto& enabled = getSession(player).wandEnabled;
     enabled       = !enabled;
+    saveSession(player.getUuid());
     output.success(tr(enabled ? "wand.enabled" : "wand.disabled"));
 }
 
 void toggleOutline(Player& player, Feedback const& output) {
     auto& session       = getSession(player);
     session.showOutline = !session.showOutline;
+    if (!session.showOutline) clearSelectionOutline(player);
+    saveSession(player.getUuid());
     refreshOutline(player, session);
     output.success(tr(session.showOutline ? "selection.outline_on" : "selection.outline_off"));
 }
@@ -422,7 +547,7 @@ void enableSelectionCommands() {
         if (session.wandEnabled && tryOpenMenu(player, session)) event.cancel();
     });
     wandStartDestroy.emplace();
-    if (config.visual.mode != "none") {
+    {
         tickListener = bus.emplaceListener<ll::event::ServerLevelTickEvent>([ticks = 0](auto& event) mutable {
             if (++ticks < 30) return;
             ticks = 0;

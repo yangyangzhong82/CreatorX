@@ -3,6 +3,10 @@
 #include "command/SelectionCommands.h"
 #include "edit/Jobs.h"
 #include "edit/Pattern.h"
+#include "Config/ConfigManager.h"
+#include "visual/PastePreview.h"
+#include "visual/SelectionOutline.h"
+#include "net/Enhancements.h"
 #include "exec/JobScheduler.h"
 #include "mod/Global.h"
 #include "session/PlayerSession.h"
@@ -20,6 +24,7 @@
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/level/BlockPos.h"
 #include "mc/world/level/dimension/Dimension.h"
+#include "mc/world/level/Level.h"
 
 #include <array>
 #include <functional>
@@ -47,11 +52,23 @@ struct FlagsParams {
 
 struct TimesParams {
     ll::command::Optional<int> times;
+    ll::command::Optional<CommandRawText> player;
 };
+
+struct RotateParams {
+    int quarterTurns;
+    ll::command::Optional<int> x;
+    ll::command::Optional<int> z;
+};
+
+struct FlipParams {
+    ll::command::Optional<core::Direction> direction;
+};
+struct HelpParams { ll::command::Optional<CommandRawText> topic; };
 
 namespace {
 
-constexpr std::array<std::string_view, 14> commandNames{
+constexpr std::array<std::string_view, 19> commandNames{
     "set",
     "replace",
     "walls",
@@ -65,9 +82,15 @@ constexpr std::array<std::string_view, 14> commandNames{
     "cancel",
     "clearclipboard",
     "clearhistory",
-    "menu"
+    "menu",
+    "help",
+    "reload",
+    "rotate",
+    "flip",
+    "history"
 };
 ll::event::ListenerPtr registerListener;
+std::uint64_t generation=0;
 
 // 检查改动上限，必要时弹窗确认，然后提交任务。返回任务是否已提交或已发出确认窗口。
 // onSubmitted 在任务真正提交时调用（确认窗口里点了执行之后）。
@@ -76,7 +99,8 @@ bool startJob(
     Feedback const&               output,
     std::unique_ptr<exec::Job>    job,
     std::uint64_t                 changes,
-    std::function<void(Player&)> onSubmitted = {}
+    std::function<void(Player&)> onSubmitted = {},
+    std::uint64_t previewToken = 0
 ) {
     std::string error;
     if (!exec::canSubmit(player.getUuid(), error)) {
@@ -87,7 +111,7 @@ bool startJob(
         output.error(tr("job.too_many_changes", changes, config.limits.maxChangesPerOperation));
         return false;
     }
-    if (changes <= config.limits.confirmThreshold) {
+    if (changes <= config.limits.confirmThreshold && !previewToken) {
         if (!exec::submitJob(player, std::move(job), error)) {
             output.error(error);
             return false;
@@ -106,7 +130,11 @@ bool startJob(
     );
     form.sendTo(
         player,
-        [pending, onSubmitted](Player& target, ll::form::ModalFormResult result, ll::form::FormCancelReason) {
+        [pending, onSubmitted, previewToken, dimension=int(player.getDimensionId()), expectedGeneration=generation](Player& target, ll::form::ModalFormResult result, ll::form::FormCancelReason) {
+            bool valid=dimension==int(target.getDimensionId()) && generation==expectedGeneration
+                && target.getCommandPermissionLevel()>=CommandPermissionLevel::GameDirectors;
+            if(previewToken) valid=finishPastePreview(target,previewToken) && valid;
+            if(!valid) { target.sendMessage(tr("preview.expired")); return; }
             if (result != ll::form::ModalFormSelectedButton::Upper || !*pending) {
                 target.sendMessage(tr("job.confirm_declined"));
                 return;
@@ -128,7 +156,10 @@ bool isHandPattern(std::string_view text) { return text == "hand" || text == "of
 
 std::optional<PasteOptions> parsePasteFlags(std::string_view flags, Feedback const& output) {
     PasteOptions options;
+    bool nextMask=false;
     for (auto token : edit::splitTokens(flags)) {
+        if(nextMask) {options.mask=std::string(flags.substr(token.data()-flags.data()));break;}
+        if(token=="-m") {nextMask=true;continue;}
         if (token.size() < 2 || token.front() != '-') {
             output.error(tr("clipboard.bad_flag", token));
             return std::nullopt;
@@ -137,12 +168,15 @@ std::optional<PasteOptions> parsePasteFlags(std::string_view flags, Feedback con
             if (flag == 'a') options.skipAir = true;
             else if (flag == 'o') options.original = true;
             else if (flag == 's') options.select = true;
+            else if (flag == 'p') options.preview = true;
+            else if (flag == 'e') options.entities = true;
             else {
                 output.error(tr("clipboard.bad_flag", token));
                 return std::nullopt;
             }
         }
     }
+    if(nextMask && !options.mask) {output.error(tr("mask.empty"));return std::nullopt;}
     return options;
 }
 
@@ -182,8 +216,12 @@ void registerEditCommand(ll::command::CommandHandle& handle, std::string_view na
                 if (auto* player = getCommandPlayer(origin, output)) replaceBlocks(*player, output, args.pattern.mText);
             });
     } else if (name == "copy") {
-        subOverload(handle, name, subcommand).execute([](Origin origin, Output output) {
-            if (auto* player = getCommandPlayer(origin, output)) copySelection(*player, output, false, std::nullopt);
+        subOverload<FlagsParams>(handle, name, subcommand).optional("flags").execute([](Origin origin, Output output, FlagsParams const& args) {
+            if (auto* player = getCommandPlayer(origin, output)) {
+                auto options=parsePasteFlags(args.flags ? std::string_view(args.flags->mText) : std::string_view{},output);
+                if(options && (options->skipAir || options->original || options->select || options->preview)) {output.error(tr("clipboard.copy_usage"));return;}
+                if(options) copySelection(*player,output,false,{},options->mask ? std::optional<std::string_view>(*options->mask) : std::nullopt,options->entities);
+            }
         });
     } else if (name == "cut") {
         subOverload<OptionalPatternParams>(handle, name, subcommand)
@@ -192,8 +230,21 @@ void registerEditCommand(ll::command::CommandHandle& handle, std::string_view na
                 auto* player = getCommandPlayer(origin, output);
                 if (!player) return;
                 std::optional<std::string_view> pattern;
-                if (args.pattern) pattern = args.pattern->mText;
-                copySelection(*player, output, true, pattern);
+                std::optional<std::string_view> mask;
+                bool entities=false;
+                if(args.pattern) {
+                    auto text=std::string_view(args.pattern->mText);
+                    auto tokens=edit::splitTokens(text);
+                    for(size_t i=0;i<tokens.size();++i) {
+                        if(tokens[i]=="-e") entities=true;
+                        else if(tokens[i]=="-m") {
+                            if(++i>=tokens.size()) {output.error(tr("mask.empty"));return;}
+                            mask=text.substr(tokens[i].data()-text.data()); break;
+                        } else if(!pattern) pattern=tokens[i];
+                        else {output.error(tr("edit.replace_usage"));return;}
+                    }
+                }
+                copySelection(*player, output, true, pattern,mask,entities);
             });
     } else if (name == "paste") {
         subOverload<FlagsParams>(handle, name, subcommand)
@@ -207,12 +258,35 @@ void registerEditCommand(ll::command::CommandHandle& handle, std::string_view na
             });
     } else if (name == "undo" || name == "redo") {
         subOverload<TimesParams>(handle, name, subcommand)
-            .optional("times")
+            .optional("times").optional("player")
             .execute([undo = name == "undo"](Origin origin, Output output, TimesParams const& args) {
                 if (auto* player = getCommandPlayer(origin, output)) {
-                    runHistory(*player, output, undo, args.times.value_or(1));
+                    runHistory(*player, output, undo, args.times.value_or(1),args.player ? std::string_view(args.player->mText) : std::string_view{});
                 }
             });
+    } else if (name == "rotate") {
+        subOverload<RotateParams>(handle, name, subcommand)
+            .required("quarterTurns").optional("x").optional("z")
+            .execute([](Origin origin, Output output, RotateParams const& args) {
+                if (auto* player = getCommandPlayer(origin, output)) rotateClipboard(*player, output, args.quarterTurns,args.x.value_or(0),args.z.value_or(0));
+            });
+    } else if (name == "flip") {
+        subOverload<FlipParams>(handle, name, subcommand)
+            .optional("direction")
+            .execute([](Origin origin, Output output, FlipParams const& args) {
+                if (auto* player = getCommandPlayer(origin, output)) {
+                    auto direction = args.direction.value_or(core::Direction::east);
+                    flipClipboard(*player, output, direction);
+                }
+            });
+    } else if(name=="help") {
+        subOverload<HelpParams>(handle,name,subcommand).optional("topic").execute([](Origin origin,Output output,HelpParams const& args) {
+            if(!getCommandPlayer(origin,output)) return;
+            auto key=args.topic ? "help."+args.topic->mText : "help.index";
+            auto message=tr(key);
+            if(message==key) output.error(tr("help.unknown"));
+            else output.success(message);
+        });
     } else {
         subOverload(handle, name, subcommand).execute([name](Origin origin, Output output) {
             auto* player = getCommandPlayer(origin, output);
@@ -223,6 +297,12 @@ void registerEditCommand(ll::command::CommandHandle& handle, std::string_view na
                 clearClipboard(*player, output);
             } else if (name == "clearhistory") {
                 clearHistory(*player, output);
+            } else if (name == "help") {
+                output.success(tr("command.help_text"));
+            } else if (name == "history") {
+                output.success(getSession(*player).history.describe());
+            } else if (name == "reload") {
+                reloadConfiguration(output);
             } else {
                 ui::openMainMenu(*player);
                 output.success(tr("menu.opened"));
@@ -256,6 +336,25 @@ void registerCommands() {
 
 } // namespace
 
+bool submitEditJob(Player& player, Feedback const& output, std::unique_ptr<exec::Job> job, std::uint64_t changes,std::function<void(Player&)> onSubmitted) {
+    return startJob(player, output, std::move(job), changes,std::move(onSubmitted));
+}
+
+bool reloadConfiguration(Feedback const& output) {
+    if(!ConfigManager::getInstance().reload()) {output.error(tr("config.load_error"));return false;}
+    I18n::getInstance().setLanguage(config.language);
+    edit::refreshBlockBlacklist();
+    refreshEnhancementOptions();
+    if(auto level=ll::service::getLevel()) level->forEachPlayer(std::function<bool(Player&)>([](Player& player) {
+        clearSelectionOutline(player);
+        cancelPastePreview(player);
+        if(auto session=findSession(player.getUuid())) if(session->showOutline && session->dimension==int(player.getDimensionId())) showSelectionOutline(player,session->cuboid);
+        return true;
+    }));
+    output.success(tr("config.reloaded"));
+    return true;
+}
+
 bool regionEdit(
     Player&                         player,
     Feedback const&                 output,
@@ -288,15 +387,13 @@ bool regionEdit(
         std::move(*pattern),
         std::move(mask)
     );
-    if (!startJob(player, output, std::move(job), core::shapeVolume(box, shape))) return false;
-
-    // 只记录成功提交的图案，表单下拉框里“最近使用”才可靠。
-    auto& session = getSession(player);
-    if (!isHandPattern(patternText)) rememberRecent(session.recentPatterns, patternText);
-    if (maskText && *maskText != "#existing" && !isHandPattern(*maskText)) {
-        rememberRecent(session.recentMasks, *maskText);
-    }
-    return true;
+    return startJob(player, output, std::move(job), core::shapeVolume(box, shape),
+        [pattern=std::string(patternText),mask=maskText ? std::optional<std::string>(*maskText) : std::nullopt](Player& target) {
+            auto& session=getSession(target);
+            if(!isHandPattern(pattern)) rememberRecent(session.recentPatterns,pattern);
+            if(mask && *mask!="#existing" && !isHandPattern(*mask)) rememberRecent(session.recentMasks,*mask);
+            saveSession(target.getUuid());
+        });
 }
 
 bool replaceBlocks(Player& player, Feedback const& output, std::string_view text) {
@@ -314,7 +411,7 @@ bool replaceBlocks(Player& player, Feedback const& output, std::string_view text
     return regionEdit(player, output, core::BoxShape::all, target, mask);
 }
 
-bool copySelection(Player& player, Feedback const& output, bool cut, std::optional<std::string_view> patternText) {
+bool copySelection(Player& player, Feedback const& output, bool cut, std::optional<std::string_view> patternText, std::optional<std::string_view> maskText, bool includeEntities) {
     auto* selection = completeSelection(player, output);
     if (!selection) return false;
     std::optional<edit::Pattern> pattern;
@@ -326,10 +423,16 @@ bool copySelection(Player& player, Feedback const& output, bool cut, std::option
             return false;
         }
     }
+    std::optional<edit::Mask> mask;
+    if(maskText) {
+        std::string error;
+        mask=edit::Mask::parse(*maskText,player,error);
+        if(!mask) {output.error(error);return false;}
+    }
     auto box    = *selection->box();
     auto feet   = player.getFeetBlockPos();
     auto offset = box.min - core::Vec3i{feet.x, feet.y, feet.z};
-    auto job    = edit::makeCopy(player.getUuid(), player.getDimensionId(), box, offset, std::move(pattern));
+    auto job    = edit::makeCopy(player.getUuid(), player.getDimensionId(), box, offset, std::move(pattern),std::move(mask),includeEntities);
     // 复制不改动世界，只有剪切需要计入改动上限。
     return startJob(player, output, std::move(job), cut ? box.volume() : 0);
 }
@@ -349,13 +452,23 @@ bool pasteClipboard(Player& player, Feedback const& output, PasteOptions options
         output.error(tr("clipboard.out_of_height"));
         return false;
     }
-    auto job = edit::makePaste(player.getUuid(), player.getDimensionId(), clipboard, min, options.skipAir);
+    std::optional<edit::Mask> mask;
+    if(options.mask) {
+        std::string error;
+        mask=edit::Mask::parse(*options.mask,player,error);
+        if(!mask) {output.error(error);return false;}
+    }
+    auto job = edit::makePaste(player.getUuid(), player.getDimensionId(), clipboard, min, options.skipAir,mask,options.entities);
     std::function<void(Player&)> select;
     if (options.select) select = [box](Player& target) { selectBox(target, box); };
-    return startJob(player, output, std::move(job), clipboard->volume(), std::move(select));
+    std::uint64_t token=0;
+    if(options.preview) token=showPastePreview(player,*clipboard,min,options.skipAir,mask ? &*mask : nullptr);
+    bool submitted=startJob(player, output, std::move(job), clipboard->volume(), std::move(select),token);
+    if(!submitted && token) cancelPastePreview(player);
+    return submitted;
 }
 
-bool runHistory(Player& player, Feedback const& output, bool undo, int times) {
+bool runHistory(Player& player, Feedback const& output, bool undo, int times, std::string_view target) {
     if (times < 1) {
         output.error(tr("history.bad_times"));
         return false;
@@ -365,14 +478,24 @@ bool runHistory(Player& player, Feedback const& output, bool undo, int times) {
         output.error(error);
         return false;
     }
-    auto& stack = getSession(player).history;
+    auto uuid=player.getUuid();
+    if(!target.empty()) {
+        if(auto other=player.getLevel().getPlayer(std::string(target))) uuid=other->getUuid();
+        else {
+            auto parsed=mce::UUID::tryFromString(target);
+            if(!parsed) {output.error(tr("history.player_missing"));return false;}
+            uuid=*parsed;
+        }
+    }
+    if(uuid!=player.getUuid() && exec::hasJob(uuid)) {output.error(tr("job.busy"));return false;}
+    auto& stack = getSession(uuid).history;
     auto  sets  = undo ? stack.popUndo(size_t(times)) : stack.popRedo(size_t(times));
     if (sets.empty()) {
         output.error(tr(undo ? "history.nothing_to_undo" : "history.nothing_to_redo"));
         return false;
     }
-    auto job = edit::makeHistory(player.getUuid(), undo, std::move(sets));
-    if (!exec::submitJob(player, std::move(job), error)) {
+    auto job = edit::makeHistory(uuid, undo, std::move(sets),player.getUuid());
+    if (!exec::submitJob(player, std::move(job), error,uuid)) {
         // 提交失败时任务被销毁，finish 不会把记录放回去；canSubmit 已检查过，正常走不到这里。
         output.error(error);
         return false;
@@ -382,21 +505,57 @@ bool runHistory(Player& player, Feedback const& output, bool undo, int times) {
 }
 
 void cancelPlayerJob(Player& player, Feedback const& output) {
+    cancelPastePreview(player);
     if (exec::cancelJob(player.getUuid())) output.success(tr("job.cancel_requested"));
     else output.error(tr("job.none"));
 }
 
 void clearClipboard(Player& player, Feedback const& output) {
     getSession(player).clipboard.reset();
+    saveClipboard(player.getUuid());
     output.success(tr("clipboard.cleared"));
 }
 
 void clearHistory(Player& player, Feedback const& output) {
     getSession(player).history.clear();
+    saveSession(player.getUuid());
     output.success(tr("history.cleared"));
 }
 
+bool rotateClipboard(Player& player, Feedback const& output, int quarterTurns,int x,int z) {
+    auto& clipboard = getSession(player).clipboard;
+    if (!clipboard) {
+        output.error(tr("clipboard.empty"));
+        return false;
+    }
+    if (quarterTurns % 90 != 0 || x%90!=0 || z%90!=0) { output.error(tr("clipboard.rotation_invalid")); return false; }
+    try {
+        auto result=edit::rotateClipboard(clipboard,quarterTurns/90,1);
+        result=edit::rotateClipboard(result,x/90,0);
+        result=edit::rotateClipboard(result,z/90,2);
+        clipboard=std::move(result);
+    }
+    catch (std::exception const& error) { output.error(tr("advanced.failed", error.what())); return false; }
+    output.success(tr("clipboard.rotated",quarterTurns,x,z));
+    saveClipboard(player.getUuid());
+    return true;
+}
+
+bool flipClipboard(Player& player, Feedback const& output, core::Direction direction) {
+    auto& clipboard = getSession(player).clipboard;
+    if (!clipboard || direction == core::Direction::me) {
+        output.error(clipboard ? tr("clipboard.bad_transform") : tr("clipboard.empty"));
+        return false;
+    }
+    try { clipboard = edit::flipClipboard(clipboard, direction); }
+    catch (std::exception const& error) { output.error(tr("advanced.failed", error.what())); return false; }
+    output.success(tr("clipboard.flipped"));
+    saveClipboard(player.getUuid());
+    return true;
+}
+
 void enableEditCommands() {
+    ++generation;
     registerListener = ll::event::EventBus::getInstance().emplaceListener<ll::event::ServerCommandRegisterEvent>(
         [](auto&) { registerCommands(); },
         ll::event::EventPriority::Low
@@ -405,6 +564,7 @@ void enableEditCommands() {
 }
 
 void disableEditCommands() {
+    ++generation;
     if (registerListener) ll::event::EventBus::getInstance().removeListener(registerListener);
     registerListener.reset();
 }

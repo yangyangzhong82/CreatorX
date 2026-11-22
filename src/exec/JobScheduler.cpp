@@ -19,6 +19,7 @@ namespace {
 
 struct Running {
     mce::UUID                             owner;
+    mce::UUID                             requester;
     std::unique_ptr<Job>                  job;
     std::chrono::steady_clock::time_point started;
 };
@@ -39,7 +40,7 @@ std::string formatCount(std::uint64_t value) {
 }
 
 void showProgress(Running const& running) {
-    auto* player = playerOf(running.owner);
+    auto* player = playerOf(running.requester);
     if (!player) return;
     auto total   = std::max<std::uint64_t>(running.job->total(), 1);
     auto done    = std::min(running.job->progress(), total);
@@ -65,10 +66,10 @@ void tick(Level& level) {
         }
         auto finished = std::move(jobs[i]);
         jobs.erase(jobs.begin() + std::ptrdiff_t(i));
-        finished.job->finish(playerOf(finished.owner), state == JobState::done ? JobEnd::completed : JobEnd::failed);
+        finished.job->finish(playerOf(finished.requester), state == JobState::done ? JobEnd::completed : JobEnd::failed);
         if (state != JobState::done) continue;
         if (auto next = finished.job->next()) {
-            jobs.insert(jobs.begin() + std::ptrdiff_t(i), Running{finished.owner, std::move(next), finished.started});
+            jobs.insert(jobs.begin() + std::ptrdiff_t(i), Running{finished.owner, finished.requester, std::move(next), finished.started});
             ++i;
         }
     }
@@ -97,30 +98,31 @@ bool canSubmit(mce::UUID const& uuid, std::string& error) {
     return true;
 }
 
-bool submitJob(Player& player, std::unique_ptr<Job> job, std::string& error) {
-    auto uuid = player.getUuid();
+bool submitJob(Player& player, std::unique_ptr<Job> job, std::string& error, std::optional<mce::UUID> owner) {
+    auto uuid = owner.value_or(player.getUuid());
     if (!canSubmit(uuid, error)) return false;
-    jobs.push_back({uuid, std::move(job), std::chrono::steady_clock::now()});
+    if(uuid!=player.getUuid() && !canSubmit(player.getUuid(),error)) return false;
+    jobs.push_back({uuid, player.getUuid(),std::move(job), std::chrono::steady_clock::now()});
     return true;
 }
 
 bool hasJob(mce::UUID const& uuid) {
-    return std::ranges::any_of(jobs, [&](Running const& running) { return running.owner == uuid; });
+    return std::ranges::any_of(jobs, [&](Running const& running) { return running.owner == uuid || running.requester==uuid; });
 }
 
 std::optional<unsigned> jobPercent(mce::UUID const& uuid) {
-    auto it = std::ranges::find_if(jobs, [&](Running const& running) { return running.owner == uuid; });
+    auto it = std::ranges::find_if(jobs, [&](Running const& running) { return running.owner == uuid || running.requester==uuid; });
     if (it == jobs.end()) return std::nullopt;
     auto total = std::max<std::uint64_t>(it->job->total(), 1);
     return unsigned(std::min(it->job->progress(), total) * 100 / total);
 }
 
 bool cancelJob(mce::UUID const& uuid) {
-    auto it = std::ranges::find_if(jobs, [&](Running const& running) { return running.owner == uuid; });
+    auto it = std::ranges::find_if(jobs, [&](Running const& running) { return running.owner == uuid || running.requester==uuid; });
     if (it == jobs.end()) return false;
     auto cancelled = std::move(*it);
     jobs.erase(it);
-    cancelled.job->finish(playerOf(cancelled.owner), JobEnd::cancelled);
+    cancelled.job->finish(playerOf(cancelled.requester), JobEnd::cancelled);
     return true;
 }
 
