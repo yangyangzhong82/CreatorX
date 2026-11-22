@@ -12,6 +12,7 @@
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/level/Level.h"
 
+#include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -53,6 +54,12 @@ PlayerSession& getSession(mce::UUID const& uuid) {
                 it->second.history.deserialize(tag["history"].get<CompoundTag>());
                 it->second.wandEnabled = bool(tag["wand"]);
                 it->second.showOutline = bool(tag["outline"]);
+                if (tag.contains("hud", Tag::Byte)) it->second.showHud = bool(tag["hud"]);
+                if (tag.contains("hud_idle_seconds", Tag::Int)) {
+                    it->second.hudIdleSeconds = std::clamp(
+                        int(tag["hud_idle_seconds"]), minHudIdleSeconds, maxHudIdleSeconds
+                    );
+                }
                 for (auto const& value : tag["patterns"].get<ListTag>()) it->second.recentPatterns.emplace_back(std::string_view(value));
                 for (auto const& value : tag["masks"].get<ListTag>()) it->second.recentMasks.emplace_back(std::string_view(value));
             } catch (std::exception const& e) {
@@ -90,6 +97,8 @@ void saveSession(mce::UUID const& uuid) {
         tag["history"] = session->history.serialize();
         tag["wand"] = session->wandEnabled;
         tag["outline"] = session->showOutline;
+        tag["hud"] = session->showHud;
+        tag["hud_idle_seconds"] = session->hudIdleSeconds;
         auto patterns = storage::Nbt::array(), masks = storage::Nbt::array();
         for (auto const& value : session->recentPatterns) patterns.push_back(value);
         for (auto const& value : session->recentMasks) masks.push_back(value);

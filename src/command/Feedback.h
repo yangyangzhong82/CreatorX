@@ -13,7 +13,7 @@ namespace creatorx {
 class Feedback {
 public:
     Feedback(CommandOutput& output) : mOutput(&output) {}
-    explicit Feedback(Player& player, std::string* errors = nullptr) : mPlayer(&player), mErrors(errors) {}
+    explicit Feedback(Player& player, std::string* errors = nullptr);
 
     void success(std::string_view text) const;
     void error(std::string_view text) const;

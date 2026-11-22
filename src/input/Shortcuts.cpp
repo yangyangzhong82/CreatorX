@@ -1,6 +1,7 @@
 #include "input/Shortcuts.h"
 
 #ifdef LL_PLAT_C
+#include "net/Enhancements.h"
 #include "ll/api/input/KeyRegistry.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/network/PacketSender.h"
@@ -38,6 +39,7 @@ void registerShortcuts() {
                 auto* player = client.getLocalPlayer();
                 if (!player || !client.isInGameInputEnabled()) return;
 
+                noteLocalHudActivity();
                 auto origin = std::make_unique<PlayerCommandOrigin>(player->getLevel(), player->getOrCreateUniqueID());
                 CommandContext context(command, std::move(origin), static_cast<int>(CurrentCmdVersion::Latest));
                 CommandRequestPacket packet{CommandRequestPacketPayload{context, false}};

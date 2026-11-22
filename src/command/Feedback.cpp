@@ -1,9 +1,14 @@
 #include "command/Feedback.h"
+#include "net/Enhancements.h"
 
 #include "mc/server/commands/CommandOutput.h"
 #include "mc/world/actor/player/Player.h"
 
 namespace creatorx {
+
+Feedback::Feedback(Player& player, std::string* errors) : mPlayer(&player), mErrors(errors) {
+    noteHudActivity(player);
+}
 
 void Feedback::success(std::string_view text) const {
     if (mOutput) mOutput->success(text);

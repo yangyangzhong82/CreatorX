@@ -66,9 +66,15 @@ struct FlipParams {
 };
 struct HelpParams { ll::command::Optional<CommandRawText> topic; };
 
+enum class SimpleEditAction { cancel, clearclipboard, clearhistory, menu, reload, history };
+
+struct SimpleEditParams {
+    SimpleEditAction action;
+};
+
 namespace {
 
-constexpr std::array<std::string_view, 19> commandNames{
+constexpr std::array<std::string_view, 13> commandNames{
     "set",
     "replace",
     "walls",
@@ -79,15 +85,9 @@ constexpr std::array<std::string_view, 19> commandNames{
     "paste",
     "undo",
     "redo",
-    "cancel",
-    "clearclipboard",
-    "clearhistory",
-    "menu",
     "help",
-    "reload",
     "rotate",
-    "flip",
-    "history"
+    "flip"
 };
 ll::event::ListenerPtr registerListener;
 std::uint64_t generation=0;
@@ -185,6 +185,32 @@ auto subOverload(ll::command::CommandHandle& handle, std::string_view name, bool
     auto overload = handle.overload<Params>();
     if (subcommand) (void)overload.text(name);
     return overload;
+}
+
+void executeSimpleEdit(SimpleEditAction action, CommandOrigin const& origin, CommandOutput& output) {
+    auto* player = getCommandPlayer(origin, output);
+    if (!player) return;
+    switch (action) {
+    case SimpleEditAction::cancel:
+        cancelPlayerJob(*player, output);
+        break;
+    case SimpleEditAction::clearclipboard:
+        clearClipboard(*player, output);
+        break;
+    case SimpleEditAction::clearhistory:
+        clearHistory(*player, output);
+        break;
+    case SimpleEditAction::menu:
+        ui::openMainMenu(*player);
+        output.success(tr("menu.opened"));
+        break;
+    case SimpleEditAction::reload:
+        reloadConfiguration(output);
+        break;
+    case SimpleEditAction::history:
+        output.success(getSession(*player).history.describe());
+        break;
+    }
 }
 
 void registerEditCommand(ll::command::CommandHandle& handle, std::string_view name, bool subcommand) {
@@ -287,31 +313,10 @@ void registerEditCommand(ll::command::CommandHandle& handle, std::string_view na
             if(message==key) output.error(tr("help.unknown"));
             else output.success(message);
         });
-    } else {
-        subOverload(handle, name, subcommand).execute([name](Origin origin, Output output) {
-            auto* player = getCommandPlayer(origin, output);
-            if (!player) return;
-            if (name == "cancel") {
-                cancelPlayerJob(*player, output);
-            } else if (name == "clearclipboard") {
-                clearClipboard(*player, output);
-            } else if (name == "clearhistory") {
-                clearHistory(*player, output);
-            } else if (name == "help") {
-                output.success(tr("command.help_text"));
-            } else if (name == "history") {
-                output.success(getSession(*player).history.describe());
-            } else if (name == "reload") {
-                reloadConfiguration(output);
-            } else {
-                ui::openMainMenu(*player);
-                output.success(tr("menu.opened"));
-            }
-        });
     }
 }
 
-void registerCommands() {
+void registerCommands(CommandRegistry& registry) {
     auto& registrar = ll::command::CommandRegistrar::getServerInstance();
     auto blockIds = edit::registeredBlockIds();
     auto fullIds = blockIds.size();
@@ -323,14 +328,32 @@ void registerCommands() {
     else registrar.tryRegisterSoftEnum(enumName, std::move(blockIds));
 
     auto& cx = registrar.getOrCreateCommand("cx", std::string(tr("command.cx")), CommandPermissionLevel::GameDirectors);
+    // 共用一个重载，减少进入存档时原版解析器注册的规则。
+    cx.overload<SimpleEditParams>().required("action").execute(
+        [](CommandOrigin const& origin, CommandOutput& output, SimpleEditParams const& args) {
+            executeSimpleEdit(args.action, origin, output);
+        }
+    );
+
+    auto registerShortCommand = [&](std::string_view name, auto&& addOverloads) {
+        if (!config.command.shortCommands || registry.findCommand(std::string(name))) return;
+        auto description = std::string(tr(fmt::format("command.{}", name)));
+        auto& handle =
+            registrar.getOrCreateCommand(std::string(name), description, CommandPermissionLevel::GameDirectors);
+        addOverloads(handle);
+    };
     for (auto name : commandNames) {
         registerEditCommand(cx, name, true);
-        if (config.command.shortCommands) {
-            auto description = std::string(tr(fmt::format("command.{}", name)));
-            auto& handle =
-                registrar.getOrCreateCommand(std::string(name), description, CommandPermissionLevel::GameDirectors);
+        registerShortCommand(name, [&](ll::command::CommandHandle& handle) {
             registerEditCommand(handle, name, false);
-        }
+        });
+    }
+    for (auto action : magic_enum::enum_values<SimpleEditAction>()) {
+        registerShortCommand(magic_enum::enum_name(action), [action](ll::command::CommandHandle& handle) {
+            handle.overload().execute([action](CommandOrigin const& origin, CommandOutput& output) {
+                executeSimpleEdit(action, origin, output);
+            });
+        });
     }
 }
 
@@ -557,10 +580,10 @@ bool flipClipboard(Player& player, Feedback const& output, core::Direction direc
 void enableEditCommands() {
     ++generation;
     registerListener = ll::event::EventBus::getInstance().emplaceListener<ll::event::ServerCommandRegisterEvent>(
-        [](auto&) { registerCommands(); },
+        [](auto& event) { registerCommands(event.commandRegistry()); },
         ll::event::EventPriority::Low
     );
-    if (ll::service::getCommandRegistry(false)) registerCommands();
+    if (auto registry = ll::service::getCommandRegistry(false)) registerCommands(*registry);
 }
 
 void disableEditCommands() {

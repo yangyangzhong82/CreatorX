@@ -17,6 +17,10 @@ class Player;
 
 namespace creatorx {
 
+inline constexpr int minHudIdleSeconds = 5;
+inline constexpr int maxHudIdleSeconds = 60;
+inline constexpr int defaultHudIdleSeconds = 15;
+
 struct WandClick {
     core::Vec3i                           position;
     int                                   dimension;
@@ -29,6 +33,10 @@ struct PlayerSession {
     core::CuboidSelection                  cuboid;
     bool                                   wandEnabled = true;
     bool                                   showOutline = true;
+    bool                                   showHud = true;
+    int                                    hudIdleSeconds = defaultHudIdleSeconds;
+    std::chrono::steady_clock::time_point  lastHudActivity{};
+    std::optional<bool>                    hudVisible;
     std::optional<WandClick>               lastLeftClick;
     std::chrono::steady_clock::time_point  lastMenuOpen{};
     std::shared_ptr<edit::Clipboard const> clipboard;

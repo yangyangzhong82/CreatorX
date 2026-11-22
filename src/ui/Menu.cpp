@@ -8,6 +8,7 @@
 #include "edit/Pattern.h"
 #include "exec/JobScheduler.h"
 #include "mod/Global.h"
+#include "net/Enhancements.h"
 #include "session/PlayerSession.h"
 
 #include "ll/api/form/CustomForm.h"
@@ -597,6 +598,21 @@ void openSettingsMenu(Player& player) {
             openSettingsMenu(p);
         }
     );
+    addButton(form, "menu.hud_settings", icon::settings, [](Player& p) {
+        auto& preferences = getSession(p);
+        CustomForm hudForm(text("menu.hud_settings"));
+        hudForm.appendToggle("show", text("menu.hud_show"), preferences.showHud);
+        hudForm.appendSlider(
+            "idle", text("menu.hud_idle_seconds"), minHudIdleSeconds, maxHudIdleSeconds, 1, preferences.hudIdleSeconds
+        );
+        hudForm.setSubmitButton(text("menu.apply"));
+        hudForm.sendTo(p, [](Player& target, CustomFormResult const& result, FormCancelReason) {
+            if (result) {
+                setHudPreferences(target, number(*result, "show") != 0, int(std::lround(number(*result, "idle"))));
+            }
+            openSettingsMenu(target);
+        });
+    });
     addButton(form, "menu.back", icon::back, [](Player& p) { openMain(p); });
     form.sendTo(player);
 }
@@ -610,6 +626,7 @@ void openHelp(Player& player) {
 // ---- 主菜单 ----
 
 void openMain(Player& player, std::string const& notice, bool error) {
+    noteHudActivity(player);
     auto& session = getSession(player);
     auto  status  = selectionSummary(player) + "\n" + clipboardSummary(session) + "\n" + historySummary(session);
     if (auto percent = exec::jobPercent(player.getUuid())) status += "\n" + tr("menu.job_running", *percent);

@@ -25,9 +25,18 @@
 
 namespace creatorx {
 struct AdvancedArgs { ll::command::Optional<CommandRawText> arguments; };
+
+enum class AdvancedAction {
+    count, distr, hollow, overlay, center, sphere, hsphere, cyl, hcyl, pyramid, hpyramid, schem, move, stack
+};
+
+struct AdvancedSubcommand {
+    AdvancedAction action;
+    ll::command::Optional<CommandRawText> arguments;
+};
+
 namespace {
 ll::event::ListenerPtr listener;
-constexpr std::string_view names[]{"count", "distr", "hollow", "overlay", "center", "sphere", "hsphere", "cyl", "hcyl", "pyramid", "hpyramid", "schem", "move", "stack"};
 int integer(std::string_view value, int min = 1, int max = 512) {
     int result;
     auto [end, ec] = std::from_chars(value.data(), value.data() + value.size(), result);
@@ -251,21 +260,33 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
     auto job = edit::makeComputedEdit(player.getUuid(), player.getDimensionId(), box, std::move(*pattern), std::move(filter), std::string(name));
     submitEditJob(player, output, std::move(job), box.volume());
 }
-void registerCommands() {
+void registerCommands(CommandRegistry& registry) {
     auto& registrar = ll::command::CommandRegistrar::getServerInstance();
     auto& root = registrar.getOrCreateCommand("cx", std::string(tr("command.cx")), CommandPermissionLevel::GameDirectors);
-    for (auto name : names) {
-        auto callback = [name](CommandOrigin const& origin, CommandOutput& output, AdvancedArgs const& args) {
-            auto player = getCommandPlayer(origin, output);
-            if (!player) return;
-            try { execute(*player, output, name, args.arguments ? std::string_view(args.arguments->mText) : std::string_view{}); }
-            catch (std::exception const& error) { output.error(tr("advanced.failed", error.what())); }
-        };
-        root.overload<AdvancedArgs>().text(name).optional("arguments").execute(callback);
-        if (config.command.shortCommands) {
-            registrar.getOrCreateCommand(std::string(name), std::string(tr("command.cx")), CommandPermissionLevel::GameDirectors)
-                .overload<AdvancedArgs>().optional("arguments").execute(callback);
+    auto run = [](AdvancedAction action, CommandOrigin const& origin, CommandOutput& output,
+                   ll::command::Optional<CommandRawText> const& arguments) {
+        if (auto* player = getCommandPlayer(origin, output)) {
+            auto raw = arguments ? std::string_view(arguments->mText) : std::string_view{};
+            executeAdvanced(*player, output, magic_enum::enum_name(action), raw);
         }
+    };
+    root.overload<AdvancedSubcommand>().required("action").optional("arguments").execute(
+        [run](CommandOrigin const& origin, CommandOutput& output, AdvancedSubcommand const& args) {
+            run(args.action, origin, output, args.arguments);
+        }
+    );
+
+    if (!config.command.shortCommands) return;
+    auto description = std::string(tr("command.cx"));
+    for (auto action : magic_enum::enum_values<AdvancedAction>()) {
+        auto name = std::string(magic_enum::enum_name(action));
+        if (registry.findCommand(name)) continue;
+        registrar.getOrCreateCommand(name, description, CommandPermissionLevel::GameDirectors)
+            .overload<AdvancedArgs>()
+            .optional("arguments")
+            .execute([run, action](CommandOrigin const& origin, CommandOutput& output, AdvancedArgs const& args) {
+                run(action, origin, output, args.arguments);
+            });
     }
 }
 } // namespace
@@ -274,8 +295,11 @@ void executeAdvanced(Player& player,Feedback const& output,std::string_view oper
     catch(std::exception const& error) {output.error(tr("advanced.failed",error.what()));}
 }
 void enableAdvancedCommands() {
-    listener = ll::event::EventBus::getInstance().emplaceListener<ll::event::ServerCommandRegisterEvent>([](auto&) { registerCommands(); }, ll::event::EventPriority::Low);
-    if (ll::service::getCommandRegistry(false)) registerCommands();
+    listener = ll::event::EventBus::getInstance().emplaceListener<ll::event::ServerCommandRegisterEvent>(
+        [](auto& event) { registerCommands(event.commandRegistry()); },
+        ll::event::EventPriority::Low
+    );
+    if (auto registry = ll::service::getCommandRegistry(false)) registerCommands(*registry);
 }
 void disableAdvancedCommands() {
     if (listener) ll::event::EventBus::getInstance().removeListener(listener);

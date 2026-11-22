@@ -2,6 +2,7 @@
 
 #include "core/region/CuboidSelection.h"
 #include "mod/Global.h"
+#include "net/Enhancements.h"
 #include "session/PlayerSession.h"
 #include "ui/Menu.h"
 #include "visual/SelectionOutline.h"
@@ -277,13 +278,13 @@ void registerSelectionCommand(ll::command::CommandHandle& handle, std::string_vi
     });
 }
 
-void registerCommands() {
+void registerCommands(CommandRegistry& registry) {
     auto& registrar   = ll::command::CommandRegistrar::getServerInstance();
     auto  description = std::string(tr("command.selection"));
     auto& cx = registrar.getOrCreateCommand("cx", std::string(tr("command.cx")), CommandPermissionLevel::GameDirectors);
     for (auto name : commandNames) {
         registerSelectionCommand(cx, name, true);
-        if (config.command.shortCommands) {
+        if (config.command.shortCommands && !registry.findCommand(std::string(name))) {
             auto& handle =
                 registrar.getOrCreateCommand(std::string(name), description, CommandPermissionLevel::GameDirectors);
             registerSelectionCommand(handle, name, false);
@@ -303,7 +304,9 @@ Player* getCommandPlayer(CommandOrigin const& origin, CommandOutput& output) {
         output.error(tr("command.no_permission"));
         return nullptr;
     }
-    return static_cast<Player*>(actor);
+    auto* player = static_cast<Player*>(actor);
+    noteHudActivity(*player);
+    return player;
 }
 
 core::CuboidSelection* completeSelection(Player& player, Feedback const& output) {
@@ -528,10 +531,10 @@ void toggleOutline(Player& player, Feedback const& output) {
 void enableSelectionCommands() {
     auto& bus        = ll::event::EventBus::getInstance();
     registerListener = bus.emplaceListener<ll::event::ServerCommandRegisterEvent>(
-        [](auto&) { registerCommands(); },
+        [](auto& event) { registerCommands(event.commandRegistry()); },
         ll::event::EventPriority::Low
     );
-    if (ll::service::getCommandRegistry(false)) registerCommands();
+    if (auto registry = ll::service::getCommandRegistry(false)) registerCommands(*registry);
     destroyListener = bus.emplaceListener<ll::event::PlayerDestroyBlockEvent>([](auto& event) {
         auto& player = event.self();
         if (!event.isCancelled() && tryWandClick(player, event.pos(), true, player.getSelectedItem())) event.cancel();
