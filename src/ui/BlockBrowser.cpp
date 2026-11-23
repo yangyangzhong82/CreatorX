@@ -412,8 +412,10 @@ void finishBrowser(std::shared_ptr<LiveBrowser> const& state, bool fallback = fa
     ll::thread::ServerThreadExecutor::getDefault().execute([uuid     = state->uuid,
                                                             catalog  = state->catalog,
                                                             selected = state->selected,
+                                                            fallback,
                                                             standard = state->standardList || fallback] {
         if (auto* player = findPlayer(uuid)) {
+            if (fallback) player->sendMessage(text("menu.blocks_dd_ui_fallback"));
             if (standard) openHome(*player, catalog);
             else catalog->picked(*player, selected);
         }
@@ -491,25 +493,18 @@ void openLiveBrowser(Player& player, State catalog) {
     });
     state->filter();
     liveBrowsers[state->uuid] = state;
-    auto shown                = state->form.show([weak](ll::ui::CustomForm::Result result) {
+    ll::thread::ServerThreadExecutor::getDefault().execute([weak] {
         auto state = weak.lock();
         if (!state || state->finished) return;
-        bool fallback = !result || *result == ll::ui::ScreenCloseReason::InvalidForm;
-        if (result && *result == ll::ui::ScreenCloseReason::UserBusy) {
-            state->finished = true;
-            liveBrowsers.erase(state->uuid);
-            if (auto* player = findPlayer(state->uuid)) player->sendMessage(text("menu.blocks_busy"));
-            return;
-        }
-        if (fallback) {
-            if (auto* player = findPlayer(state->uuid)) player->sendMessage(text("menu.blocks_dd_ui_fallback"));
-        }
-        finishBrowser(state, fallback);
+        auto shown = state->form.show([weak](ll::ui::CustomForm::Result result) {
+            if (auto state = weak.lock()) {
+                bool fallback = !result || *result == ll::ui::ScreenCloseReason::InvalidForm
+                             || *result == ll::ui::ScreenCloseReason::UserBusy;
+                finishBrowser(state, fallback);
+            }
+        });
+        if (!shown) finishBrowser(state, true);
     });
-    if (!shown) {
-        player.sendMessage(text("menu.blocks_dd_ui_fallback"));
-        finishBrowser(state, true);
-    }
 }
 
 

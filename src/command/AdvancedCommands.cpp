@@ -6,6 +6,7 @@
 #include "schematic/Schematic.h"
 #include "session/PlayerSession.h"
 #include "storage/Nbt.h"
+#include "ui/AdvancedMenu.h"
 #include "mod/Global.h"
 #include "ll/api/command/CommandHandle.h"
 #include "ll/api/command/CommandRegistrar.h"
@@ -31,12 +32,20 @@ namespace creatorx {
 struct AdvancedArgs { ll::command::Optional<CommandRawText> arguments; };
 
 enum class AdvancedAction {
-    count, distr, hollow, overlay, center, sphere, hsphere, cyl, hcyl, pyramid, hpyramid, schem, move, stack
+    count, distr, hollow, overlay, center, sphere, hsphere, cyl, hcyl, pyramid, hpyramid, move, stack
 };
 
 struct AdvancedSubcommand {
     AdvancedAction action;
     ll::command::Optional<CommandRawText> arguments;
+};
+
+struct SchematicFileArgs {
+    CommandRawText fileAndOptions;
+};
+
+struct SchematicListArgs {
+    ll::command::Optional<CommandRawText> search;
 };
 
 namespace {
@@ -241,6 +250,24 @@ bool runSchematic(
     return false;
 }
 
+void runSchematicFile(Player& player, Feedback const& output, std::string_view action, std::string_view raw) {
+    auto tokens = edit::splitTokens(raw);
+    if (tokens.empty()) throw std::runtime_error(std::string(tr("schematic.usage")));
+    auto file = tokens.front();
+    if (file.size() >= 2 && file.front() == '"' && file.back() == '"') file = file.substr(1, file.size() - 2);
+    std::string format;
+    bool skipAir = false, entities = false;
+    for (size_t i = 1; i < tokens.size(); ++i) {
+        auto token = tokens[i];
+        if (token == "-a" && action == "place") skipAir = true;
+        else if (token == "-e" && (action == "export" || action == "place")) entities = true;
+        else if (!token.starts_with('-') && format.empty()) format = token;
+        else throw std::runtime_error(std::string(tr("schematic.usage")));
+    }
+    if (format.empty()) format = action == "export" || action == "place" ? "mcstructure" : "cxs";
+    runSchematic(player, output, action, std::string(file), std::move(format), skipAir, entities);
+}
+
 void execute(Player& player, Feedback const& output, std::string_view name, std::string_view raw) {
     auto tokens = edit::splitTokens(raw);
     if (name == "move" || name == "stack") {
@@ -289,29 +316,6 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
         std::function<void(Player&)> follow;
         if(select) follow=[destination](Player& target) {selectBox(target,destination);};
         submitEditJob(player,output,std::move(job),changed,std::move(follow));
-        return;
-    }
-    if (name == "schem") {
-        if (tokens.empty()) throw std::runtime_error(std::string(tr("schematic.usage")));
-        if (tokens[0] == "list") {
-            output.success(schematic::list(tokens.size() > 1 ? tokens[1] : std::string_view{}));
-            return;
-        }
-        if (tokens.size() < 2) throw std::runtime_error(std::string(tr("schematic.usage")));
-        auto action = tokens[0];
-        auto file = tokens[1];
-        if (file.size() >= 2 && file.front() == '"' && file.back() == '"') file = file.substr(1, file.size() - 2);
-        std::string format;
-        bool skipAir = false, entities = false;
-        for (size_t i = 2; i < tokens.size(); ++i) {
-            auto token = tokens[i];
-            if (token == "-a" && action == "place") skipAir = true;
-            else if (token == "-e" && (action == "export" || action == "place")) entities = true;
-            else if (!token.starts_with('-') && format.empty()) format = token;
-            else throw std::runtime_error(std::string(tr("schematic.usage")));
-        }
-        if (format.empty()) format = action == "export" || action == "place" ? "mcstructure" : "cxs";
-        runSchematic(player, output, action, std::string(file), std::move(format), skipAir, entities);
         return;
     }
     if (name == "distr" && raw == "-c") {
@@ -463,6 +467,47 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
         if (!mask.empty()) rememberRecent(getSession(target).recentMasks, mask);
     });
 }
+void registerSchematicCommands(ll::command::CommandHandle& handle, bool subcommand) {
+    auto menu = handle.overload();
+    if (subcommand) (void)menu.text("schem");
+    menu.execute([](CommandOrigin const& origin, CommandOutput& output) {
+        if (auto* player = getCommandPlayer(origin, output)) {
+            ui::openSchematicMenu(*player);
+            output.success(tr("menu.opened"));
+        }
+    });
+
+    auto list = handle.overload<SchematicListArgs>();
+    if (subcommand) (void)list.text("schem");
+    list.text("list").optional("search").execute(
+        [](CommandOrigin const& origin, CommandOutput& output, SchematicListArgs const& args) {
+            if (!getCommandPlayer(origin, output)) return;
+            try {
+                auto tokens = edit::splitTokens(args.search ? args.search->mText : std::string_view{});
+                output.success(schematic::list(tokens.empty() ? std::string_view{} : tokens.front()));
+            } catch (std::exception const& error) {
+                output.error(tr("advanced.failed", error.what()));
+            }
+        }
+    );
+
+    for (std::string_view action : {"export", "place", "save", "load", "delete"}) {
+        auto file = handle.overload<SchematicFileArgs>();
+        if (subcommand) (void)file.text("schem");
+        file.text(action).required("fileAndOptions").execute(
+            [action](CommandOrigin const& origin, CommandOutput& output, SchematicFileArgs const& args) {
+                if (auto* player = getCommandPlayer(origin, output)) {
+                    try {
+                        runSchematicFile(*player, output, action, args.fileAndOptions.mText);
+                    } catch (std::exception const& error) {
+                        output.error(tr("advanced.failed", error.what()));
+                    }
+                }
+            }
+        );
+    }
+}
+
 void registerCommands(CommandRegistry& registry) {
     auto& registrar = ll::command::CommandRegistrar::getServerInstance();
     auto& root = registrar.getOrCreateCommand("cx", std::string(tr("command.cx")), CommandPermissionLevel::GameDirectors);
@@ -478,9 +523,13 @@ void registerCommands(CommandRegistry& registry) {
             run(args.action, origin, output, args.arguments);
         }
     );
+    registerSchematicCommands(root, true);
 
     if (!config.command.shortCommands) return;
     auto description = std::string(tr("command.cx"));
+    if (!registry.findCommand("schem")) {
+        registerSchematicCommands(registrar.getOrCreateCommand("schem", description, CommandPermissionLevel::GameDirectors), false);
+    }
     for (auto action : magic_enum::enum_values<AdvancedAction>()) {
         auto name = std::string(magic_enum::enum_name(action));
         if (registry.findCommand(name)) continue;

@@ -446,7 +446,7 @@
     "help.cancel": "/cx cancel",
     "help.menu": "/cx menu",
     "help.reload": "/cx reload",
-    "help.schem": "/cx schem export <file> [-e] | place <file> [-a] [-e] | save/load/delete <file> | list [search]",
+    "help.schem": "/cx schem opens the schematics menu.\nSubcommands: export <file> [format] [-e] | place <file> [format] [-a] [-e] | save/load/delete <file> [format] | list [search]",
     "help.help": "/cx help [command]",
     "help.index": "CreatorX commands:\nwand, pos1, pos2, hpos1, hpos2, size, desel, togglewand, expand, contract, shift, outset, inset, set, replace, walls, faces, outline, hollow, overlay, center, move, stack, sphere, hsphere, cyl, hcyl, pyramid, hpyramid, count, distr, copy, cut, paste, rotate, flip, clearclipboard, undo, redo, history, clearhistory, cancel, menu, reload, schem, brush, tool, mask, mat, range, none, help\nUse /cx help <command> for syntax.",
     "menu.adjust_selection": "Shift / Outset / Inset Selection",

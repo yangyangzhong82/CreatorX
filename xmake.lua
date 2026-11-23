@@ -13,7 +13,7 @@ else
 end
 
 add_requires("levibuildscript")
-add_requires("sqlite")
+add_requires("sqlite3")
 
 if not has_config("vs_runtime") then
     set_runtimes("MD")
@@ -48,7 +48,7 @@ target("creatorx")
         set_toolchains("clang-cl")
     end
     add_packages("levilamina")
-    add_packages("sqlite")
+    add_packages("sqlite3")
     
     set_kind("shared")
     set_languages("c++20")

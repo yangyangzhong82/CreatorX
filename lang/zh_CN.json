@@ -446,7 +446,7 @@
     "help.cancel": "/cx cancel",
     "help.menu": "/cx menu",
     "help.reload": "/cx reload",
-    "help.schem": "/cx schem export <文件> [-e] | place <文件> [-a] [-e] | save/load/delete <文件> | list [关键词]",
+    "help.schem": "/cx schem 打开原理图管理。\n子命令：export <文件> [格式] [-e] | place <文件> [格式] [-a] [-e] | save/load/delete <文件> [格式] | list [关键词]",
     "help.help": "/cx help [command]",
     "help.index": "CreatorX 命令：\nwand、pos1、pos2、hpos1、hpos2、size、desel、togglewand、expand、contract、shift、outset、inset、set、replace、walls、faces、outline、hollow、overlay、center、move、stack、sphere、hsphere、cyl、hcyl、pyramid、hpyramid、count、distr、copy、cut、paste、rotate、flip、clearclipboard、undo、redo、history、clearhistory、cancel、menu、reload、schem、brush、tool、mask、mat、range、none、help\n使用 /cx help <命令> 查看语法。",
     "menu.adjust_selection": "平移 / 外扩 / 内缩选区",
