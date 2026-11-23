@@ -41,12 +41,17 @@ struct Clipboard {
         auto& page      = mPages[pageIndex];
         if (!page) {
             auto count = std::min<std::size_t>(pageSize, volume() - pageIndex * pageSize);
-            page = std::make_unique_for_overwrite<Cell[]>(count);
+            page = std::make_unique<Cell[]>(count);
         }
         page[index % pageSize] = cell;
     }
 
-    Cell const& at(std::size_t index) const { return mPages[index / pageSize][index % pageSize]; }
+    Cell const& at(std::size_t index) const {
+        static constexpr Cell empty{nullptr, nullptr};
+        if (mPages.empty()) return empty;
+        auto const& page = mPages[index / pageSize];
+        return page ? page[index % pageSize] : empty;
+    }
     CompoundTag const& stateOf(Block const* block) const { return mStates.at(block); }
 
 private:

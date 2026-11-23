@@ -96,7 +96,7 @@ CreatorX 是基于 LeviLamina（`26.60.*`）的 Minecraft 基岩版快速建造�
 | `rotate` | `/cx rotate <Y角度> [X角度] [Z角度]` | 按 90° 倍数三维旋转剪贴板，自动同步旋转楼梯/门/原木/铁轨等方块状态与实体朝向 |
 | `flip` | `/cx flip [方向]` | 沿指定轴镜像翻转剪贴板，默认按玩家当前朝向。 |
 | `clearclipboard` | `/cx clearclipboard` | 清空当前剪贴板 |
-| `schem` | `/cx schem save <名称> [cxs\|mcstructure]`<br>`/cx schem load <名称> [cxs\|mcstructure]`<br>`/cx schem list [关键词]`<br>`/cx schem delete <名称> [cxs\|mcstructure]` | 保存剪贴板为原理图、加载原理图到剪贴板、列出/搜索原理图、删除原理图（支持 `.cxs` 与原版结构方块通用的 `.mcstructure`，存于 `mods/creatorx/data/schematics/`） |
+| `schem` | `/cx schem export <文件> [格式] [-e]`<br>`/cx schem place <文件> [格式] [-a] [-e]`<br>`/cx schem save <文件> [格式]`<br>`/cx schem load <文件> [格式]`<br>`/cx schem list [关键词]`<br>`/cx schem delete <文件> [格式]` | 导出选区、直接放置、保存或加载剪贴板。支持 `.mcstructure`、`.cxs`、`.schem` 和 `.litematic`，文件位于 `mods/creatorx/data/schematics/` |
 
 ---
 

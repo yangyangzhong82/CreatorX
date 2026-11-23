@@ -164,12 +164,14 @@
 | --- | --- | --- | --- |
 | 保存 | `/cx schem save <名称> [格式]` | 保存剪贴板 | P1 |
 | 加载 | `/cx schem load <名称>` | 读入剪贴板 | P1 |
+| 导出选区 | `/cx schem export <文件>` | 直接将当前选区写入文件 | P1 |
+| 放置文件 | `/cx schem place <文件>` | 将结构的最小角放在脚下，可撤销 | P1 |
 | 列表 / 搜索 | `/cx schem list [页] [关键字]` | 名称补全 | P1 |
 | 删除 | `/cx schem delete <名称>` | | P1 |
 | `.mcstructure` | 读 / 写 | 基岩原生，结构方块和其他工具通用 | P1 |
 | `.cxs` | 读 / 写 | 自有格式，带作者、描述、标签 | P1 |
-| `.schem`（Sponge） | 读 | Java 版导入，需方块映射表 | P2 |
-| `.schem` | 写 | | P3 |
+| `.schem`（Sponge） | 读 / 写 | 读 v1–v3，写 v3 | P2 |
+| `.litematic`（Litematica） | 读 / 写 | 支持多子区域导入，导出为单区域 | P2 |
 | 公共 / 私有目录 | 配置 | | P2 |
 | 原理图浏览器 | 表单 | 分页、详情、加载、删除 | P2 |
 
@@ -233,6 +235,6 @@
 - [x] **区域编辑与搬运**：`set`、`replace`、`walls`、`faces`/`outline`、`hollow`、`overlay`、`center`、`move`、`stack`
 - [x] **几何形状生成**：`sphere`/`hsphere`（支持椭球与 `-r` 抬高）、`cyl`/`hcyl`（支持椭圆柱）、`pyramid`/`hpyramid`
 - [x] **剪贴板与变换**：`copy`/`cut`/`paste`（支持 `-a` 跳过空气、`-o` 原位、`-s` 选中、`-p` 假方块预览确认、`-e` 实体拷贝、`-m` 掩码过滤，自动携带含水层与方块实体 NBT）、`rotate`（三维 90° 倍数同步旋转方块状态与实体朝向）、`flip`（对称镜像翻转）、`clearclipboard`
-- [x] **原理图读写**：`/cx schem save|load|list|delete`，完整支持 `.cxs` 与基岩原生 `.mcstructure`
+- [x] **原理图读写**：`/cx schem` 支持导出选区和直接放置，格式包括 `.cxs`、`.mcstructure`、`.schem` 和 `.litematic`
 - [x] **历史持久化与跨玩家回滚**：`undo`/`redo`（支持指定其他在线玩家或离线 UUID）、`history` 历史列表、`clearhistory`、超内存自动异步溢写硬盘、退服/关服持久化保存
 - [x] **全图形化表单与客户端增强**：`/cx menu` 全功能 GUI（内置方块关键词分页搜索、最近 10 条图案/掩码记忆）、`PrimitiveShapesPacket` 实线框与粒子自适应可视化、`F6`–`F10` 客户端快捷键、`creatorx:status` 双端动作栏实时 HUD、`/cx reload` 热重载配置与中英文多语言

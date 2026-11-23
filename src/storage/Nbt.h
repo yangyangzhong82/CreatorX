@@ -21,6 +21,11 @@ CompoundTag readNbt(std::filesystem::path const& path);
 void writeNbt(std::filesystem::path const& path, CompoundTag const& tag);
 using NbtSource = std::variant<CompoundTag, std::function<CompoundTag()>>;
 std::shared_future<void> queueNbt(std::filesystem::path path, NbtSource source, std::vector<std::shared_future<void>> dependencies = {});
+std::shared_future<void> queueBytes(
+    std::filesystem::path path, std::function<std::string()> source,
+    std::vector<std::shared_future<void>> dependencies = {}
+);
+std::shared_future<void> pendingWrite(std::filesystem::path const& path);
 void waitForWrite(std::filesystem::path const& path);
 void stopStorage();
 void startStorage();

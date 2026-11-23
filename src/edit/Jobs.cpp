@@ -678,13 +678,15 @@ private:
 
 class CopyJob final : public exec::Job {
 public:
-    CopyJob(mce::UUID owner, int dimension, core::Box box, core::Vec3i offset, std::optional<Pattern> cutPattern, std::optional<Mask> mask, bool includeEntities)
+    CopyJob(mce::UUID owner, int dimension, core::Box box, core::Vec3i offset, std::optional<Pattern> cutPattern,
+            std::optional<Mask> mask, bool includeEntities, CopyDestination destination)
     : mOwner(owner),
       mDimension(dimension),
       mBox(box),
       mIterator(box),
       mCutPattern(std::move(cutPattern)),
-      mClipboard(std::make_shared<Clipboard>()), mMask(std::move(mask)), mIncludeEntities(includeEntities) {
+      mClipboard(std::make_shared<Clipboard>()), mMask(std::move(mask)), mIncludeEntities(includeEntities),
+      mDestination(std::move(destination)) {
         mClipboard->size   = box.size();
         mClipboard->offset = offset;
         mClipboard->origin = box.min;
@@ -751,6 +753,7 @@ public:
             return;
         }
         mCompleted = true;
+        if (mDestination) return;
         if (auto* session = findSession(mOwner)) session->clipboard = mClipboard;
         saveClipboard(mOwner);
         auto size = mBox.size();
@@ -758,7 +761,9 @@ public:
     }
 
     std::unique_ptr<exec::Job> next() override {
-        if (!mCompleted || !mCutPattern || !findSession(mOwner)) return nullptr;
+        if (!mCompleted) return nullptr;
+        if (mDestination) return mDestination(std::move(mClipboard));
+        if (!mCutPattern || !findSession(mOwner)) return nullptr;
         std::vector<CompoundTag> removed;
         if(mIncludeEntities) for(auto const& actor:mClipboard->actors) removed.push_back(actor["nbt"].get<CompoundTag>());
         return makeRegionEdit(mOwner, mDimension, mBox, core::BoxShape::all, std::move(*mCutPattern), std::move(mMask),std::move(removed));
@@ -776,6 +781,7 @@ private:
     bool                       mCompleted = false;
     std::optional<Mask> mMask;
     bool mIncludeEntities;
+    CopyDestination mDestination;
     std::set<std::pair<int,int>> mActorChunks;
     std::set<std::int64_t> mActorIds;
 };
@@ -1007,8 +1013,11 @@ std::unique_ptr<exec::Job> makeRegionEdit(
 }
 
 std::unique_ptr<exec::Job>
-makeCopy(mce::UUID owner, int dimension, core::Box box, core::Vec3i offset, std::optional<Pattern> cutPattern, std::optional<Mask> mask, bool includeEntities) {
-    return std::make_unique<CopyJob>(owner, dimension, box, offset, std::move(cutPattern),std::move(mask),includeEntities);
+makeCopy(mce::UUID owner, int dimension, core::Box box, core::Vec3i offset, std::optional<Pattern> cutPattern,
+         std::optional<Mask> mask, bool includeEntities, CopyDestination destination) {
+    return std::make_unique<CopyJob>(
+        owner, dimension, box, offset, std::move(cutPattern), std::move(mask), includeEntities, std::move(destination)
+    );
 }
 
 std::unique_ptr<exec::Job>

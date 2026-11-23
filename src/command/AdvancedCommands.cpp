@@ -2,6 +2,7 @@
 #include "command/EditCommands.h"
 #include "command/SelectionCommands.h"
 #include "edit/Jobs.h"
+#include "schematic/JavaSchematic.h"
 #include "schematic/Schematic.h"
 #include "session/PlayerSession.h"
 #include "storage/Nbt.h"
@@ -11,6 +12,7 @@
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/command/ServerCommandRegisterEvent.h"
 #include "ll/api/service/Bedrock.h"
+#include "ll/api/thread/ThreadPoolExecutor.h"
 #include "mc/server/commands/CommandOrigin.h"
 #include "mc/server/commands/CommandOutput.h"
 #include "mc/server/commands/CommandRawText.h"
@@ -39,6 +41,7 @@ struct AdvancedSubcommand {
 
 namespace {
 ll::event::ListenerPtr listener;
+std::unique_ptr<ll::thread::ThreadPoolExecutor> schematicReader;
 int integer(std::string_view value, int min = 1, int max = 512) {
     int result;
     auto [end, ec] = std::from_chars(value.data(), value.data() + value.size(), result);
@@ -65,39 +68,139 @@ core::Box shapeBounds(core::Vec3i center, int rx, int rz, int bottom, int top) {
     };
 }
 
-class SchematicJob final : public exec::Job {
-public:
-    SchematicJob(mce::UUID owner,std::future<CompoundTag> read) : mOwner(owner),mRead(std::move(read)) {}
-    SchematicJob(mce::UUID owner,std::shared_future<void> write) : mOwner(owner),mWrite(std::move(write)) {}
-    std::uint64_t total() const override {return 1;}
-    std::uint64_t progress() const override {return 0;}
-    exec::JobState run(Level&,exec::Budget const&) override {
-        try {
-            if(mRead.valid()) {
-                if(mRead.wait_for(std::chrono::seconds(0))!=std::future_status::ready) return exec::JobState::running;
-                auto clipboard=schematic::deserialize(mRead.get());
-                if(auto session=findSession(mOwner)) session->clipboard=std::move(clipboard);
-                saveClipboard(mOwner);
-            } else {
-                if(mWrite.wait_for(std::chrono::seconds(0))!=std::future_status::ready) return exec::JobState::running;
-                mWrite.get();
-            }
-            return exec::JobState::done;
-        } catch(std::exception const& error) {mError=tr("advanced.failed",error.what());return exec::JobState::failed;}
-    }
-    void finish(Player* player,exec::JobEnd end) override {
-        if(player) player->sendMessage(end==exec::JobEnd::completed ? tr("schematic.done") : end==exec::JobEnd::cancelled ? (mWrite.valid() ? tr("schematic.save_continues") : tr("inspect.cancelled")) : std::string_view(mError));
-    }
-private:
-    mce::UUID mOwner;
-    std::future<CompoundTag> mRead;
-    std::shared_future<void> mWrite;
+using SchematicSource = std::variant<CompoundTag, schematic::JavaStructure>;
+using schematic::FileFormat;
+
+bool javaFormat(FileFormat format) { return format == FileFormat::schem || format == FileFormat::litematic; }
+
+struct SchematicPlacement {
+    int dimension;
+    core::Vec3i min;
+    bool skipAir;
+    bool entities;
 };
 
-bool runSchematic(Player& player, Feedback const& output, std::string_view action, std::string name, std::string format) {
-    auto path = schematic::path(std::move(name), std::move(format));
+class SchematicJob final : public exec::Job {
+public:
+    SchematicJob(mce::UUID owner, std::future<SchematicSource> read, std::optional<SchematicPlacement> placement)
+    : mOwner(owner), mRead(std::move(read)), mPlacement(placement) {}
+
+    SchematicJob(mce::UUID owner, std::shared_future<void> write, std::shared_ptr<schematic::JavaWarnings> warnings)
+    : mOwner(owner), mWrite(std::move(write)), mWriteWarnings(std::move(warnings)) {}
+
+    std::uint64_t total() const override { return mImport ? mImport->total() : 1; }
+    std::uint64_t progress() const override { return mImport ? mImport->progress() : 0; }
+
+    exec::JobState run(Level&, exec::Budget const& budget) override {
+        try {
+            if (mWrite.valid()) {
+                if (mWrite.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return exec::JobState::running;
+                mWrite.get();
+                return exec::JobState::done;
+            }
+            if (mRead.valid()) {
+                if (mRead.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return exec::JobState::running;
+                auto data = mRead.get();
+                if (auto tag = std::get_if<CompoundTag>(&data)) mClipboard = schematic::deserialize(*tag);
+                else mImport.emplace(std::get<schematic::JavaStructure>(std::move(data)));
+            }
+            if (mImport) {
+                if (!mImport->step(budget)) return exec::JobState::running;
+                mClipboard = mImport->clipboard();
+            }
+            if (!mPlacement) {
+                if (auto* session = findSession(mOwner)) {
+                    session->clipboard = std::move(mClipboard);
+                    saveClipboard(mOwner);
+                }
+            }
+            return exec::JobState::done;
+        } catch (std::exception const& error) {
+            mError = tr("advanced.failed", error.what());
+            return exec::JobState::failed;
+        }
+    }
+
+    void finish(Player* player, exec::JobEnd end) override {
+        if (!player) return;
+        if (end == exec::JobEnd::failed) {
+            player->sendMessage(mError);
+            return;
+        }
+        if (end == exec::JobEnd::cancelled) {
+            player->sendMessage(tr(mWrite.valid() ? "schematic.save_continues" : "inspect.cancelled"));
+            return;
+        }
+        auto warnings = mImport ? &mImport->warnings() : mWriteWarnings.get();
+        if (warnings && (warnings->blocks || warnings->blockEntities || warnings->actors)) {
+            player->sendMessage(tr("schematic.java_warnings", warnings->blocks, warnings->blockEntities, warnings->actors));
+        }
+        if (mPlacement) {
+            if (int(player->getDimensionId()) != mPlacement->dimension) {
+                player->sendMessage(tr("schematic.dimension_changed"));
+                return;
+            }
+            placeStructure(*player, Feedback(*player), std::move(mClipboard), mPlacement->min,
+                           mPlacement->skipAir, mPlacement->entities);
+            return;
+        }
+        player->sendMessage(tr("schematic.done"));
+    }
+
+private:
+    mce::UUID mOwner;
+    std::future<SchematicSource> mRead;
+    std::optional<SchematicPlacement> mPlacement;
+    std::shared_future<void> mWrite;
+    std::shared_ptr<schematic::JavaWarnings> mWriteWarnings;
+    std::optional<schematic::JavaImport> mImport;
+    std::shared_ptr<edit::Clipboard const> mClipboard;
+};
+
+std::unique_ptr<exec::Job> saveSchematic(
+    mce::UUID owner, std::filesystem::path const& path, FileFormat format,
+    std::shared_ptr<edit::Clipboard const> clipboard
+) {
+    if (javaFormat(format)) {
+        auto warnings = std::make_shared<schematic::JavaWarnings>();
+        auto write = storage::queueBytes(path, [clipboard = std::move(clipboard), format, warnings] {
+            return schematic::writeJavaStructure(*clipboard, format == FileFormat::litematic, *warnings);
+        });
+        return std::make_unique<SchematicJob>(owner, std::move(write), std::move(warnings));
+    }
+    auto write = storage::queueNbt(path, [clipboard = std::move(clipboard), format] {
+        return schematic::serialize(*clipboard, format == FileFormat::mcstructure);
+    });
+    return std::make_unique<SchematicJob>(owner, std::move(write), nullptr);
+}
+
+std::future<SchematicSource> readSchematic(std::filesystem::path const& path, FileFormat format) {
+    if (!schematicReader) schematicReader = std::make_unique<ll::thread::ThreadPoolExecutor>("CreatorX Schematic", 2);
+    auto task = std::make_shared<std::packaged_task<SchematicSource()>>(
+        [path, format, write = storage::pendingWrite(path), limit = config.limits.maxSelectionVolume,
+         missing = std::string(tr("schematic.missing")), tooLarge = std::string(tr("schematic.too_large"))]() -> SchematicSource {
+            if (write.valid()) write.get();
+            if (!std::filesystem::is_regular_file(path)) throw std::runtime_error(missing);
+            if (javaFormat(format)) return schematic::readJavaStructure(path, format == FileFormat::litematic, limit);
+            if (std::filesystem::file_size(path) > 256ull * 1024 * 1024) throw std::runtime_error(tooLarge);
+            return storage::readNbt(path);
+        }
+    );
+    auto read = task->get_future();
+    schematicReader->execute([task] { (*task)(); });
+    return read;
+}
+
+bool runSchematic(
+    Player& player, Feedback const& output, std::string_view action, std::string name, std::string extension,
+    bool skipAir = false, bool entities = false
+) {
+    auto path = schematic::path(std::move(name), std::move(extension));
+    auto format = schematic::fileFormat(path);
+    auto owner = player.getUuid();
+    auto dimension = int(player.getDimensionId());
     std::string error;
-    if (!exec::canSubmit(player.getUuid(), error)) {
+    if (!exec::canSubmit(owner, error)) {
         output.error(error);
         return false;
     }
@@ -106,18 +209,24 @@ bool runSchematic(Player& player, Feedback const& output, std::string_view actio
     if (action == "save") {
         auto clipboard = getSession(player).clipboard;
         if (!clipboard) throw std::runtime_error(std::string(tr("clipboard.empty")));
-        auto write = storage::queueNbt(path, [clipboard, native = path.extension() == ".mcstructure"] {
-            return schematic::serialize(*clipboard, native);
-        });
-        job = std::make_unique<SchematicJob>(player.getUuid(), std::move(write));
-    } else if (action == "load") {
-        getSession(player);
-        storage::waitForWrite(path);
-        if (!std::filesystem::is_regular_file(path)) throw std::runtime_error(std::string(tr("schematic.missing")));
-        if (std::filesystem::file_size(path) > 256ull * 1024 * 1024) throw std::runtime_error(std::string(tr("schematic.too_large")));
-        job = std::make_unique<SchematicJob>(
-            player.getUuid(), std::async(std::launch::async, [path] { return storage::readNbt(path); })
+        job = saveSchematic(owner, path, format, std::move(clipboard));
+    } else if (action == "export") {
+        auto* selection = completeSelection(player, output);
+        if (!selection) return false;
+        job = edit::makeCopy(owner, dimension, *selection->box(), {}, {}, {}, entities,
+            [owner, path, format](std::shared_ptr<edit::Clipboard const> clipboard) {
+                return saveSchematic(owner, path, format, std::move(clipboard));
+            }
         );
+    } else if (action == "load" || action == "place") {
+        std::optional<SchematicPlacement> placement;
+        if (action == "place") {
+            auto feet = player.getFeetBlockPos();
+            placement = SchematicPlacement{dimension, {feet.x, feet.y, feet.z}, skipAir, entities};
+        } else {
+            getSession(player);
+        }
+        job = std::make_unique<SchematicJob>(owner, readSchematic(path, format), placement);
     } else if (action == "delete") {
         storage::waitForWrite(path);
         if (!std::filesystem::remove(path)) throw std::runtime_error(std::string(tr("schematic.missing")));
@@ -189,7 +298,20 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
             return;
         }
         if (tokens.size() < 2) throw std::runtime_error(std::string(tr("schematic.usage")));
-        runSchematic(player, output, tokens[0], std::string(tokens[1]), tokens.size() > 2 ? std::string(tokens[2]) : "cxs");
+        auto action = tokens[0];
+        auto file = tokens[1];
+        if (file.size() >= 2 && file.front() == '"' && file.back() == '"') file = file.substr(1, file.size() - 2);
+        std::string format;
+        bool skipAir = false, entities = false;
+        for (size_t i = 2; i < tokens.size(); ++i) {
+            auto token = tokens[i];
+            if (token == "-a" && action == "place") skipAir = true;
+            else if (token == "-e" && (action == "export" || action == "place")) entities = true;
+            else if (!token.starts_with('-') && format.empty()) format = token;
+            else throw std::runtime_error(std::string(tr("schematic.usage")));
+        }
+        if (format.empty()) format = action == "export" || action == "place" ? "mcstructure" : "cxs";
+        runSchematic(player, output, action, std::string(file), std::move(format), skipAir, entities);
         return;
     }
     if (name == "distr" && raw == "-c") {
@@ -394,5 +516,6 @@ void enableAdvancedCommands() {
 void disableAdvancedCommands() {
     if (listener) ll::event::EventBus::getInstance().removeListener(listener);
     listener.reset();
+    schematicReader.reset();
 }
 } // namespace creatorx

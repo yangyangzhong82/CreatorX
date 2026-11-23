@@ -13,6 +13,7 @@ else
 end
 
 add_requires("levibuildscript")
+add_requires("sqlite")
 
 if not has_config("vs_runtime") then
     set_runtimes("MD")
@@ -47,7 +48,8 @@ target("creatorx")
         set_toolchains("clang-cl")
     end
     add_packages("levilamina")
-
+    add_packages("sqlite")
+    
     set_kind("shared")
     set_languages("c++20")
     set_symbols("debug")
@@ -67,6 +69,9 @@ target("creatorx")
         local output_dir = path.join(os.projectdir(), "bin", target:name())
         os.mkdir(output_dir)
         os.cp(path.join(os.projectdir(), "config.jsonc"), path.join(output_dir, "config.jsonc"))
+        local assets_dst = path.join(output_dir, "assets")
+        os.mkdir(assets_dst)
+        os.cp(path.join(os.projectdir(), "assets", "*"), assets_dst)
 
         local lang_src = path.join(os.projectdir(), "lang")
         local lang_dst = path.join(output_dir, "lang")

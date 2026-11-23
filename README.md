@@ -27,7 +27,7 @@ CreatorX 是基于 **LeviLamina** 的 Minecraft 基岩版 WorldEdit 式快速建
 - **选区与统计**：魔杖左右键设点、脚下与相对/局部坐标设点（`/cx pos1`、`/cx pos2`）、准星视线设点（`/cx hpos1`、`/cx hpos2`）、单向/双向扩展收缩（`/cx expand`、`/cx contract`）、平移（`/cx shift`）、六面外扩/内缩（`/cx outset`、`/cx inset`）、方块计数与分布统计（`/cx count`、`/cx distr`），支持选区线框与粒子自动切换。
 - **图案与掩码**：支持单方块、精确方块状态（`wool[color=red]`）、百分比随机混合（`60%stone,40%andesite`）、主副手方块（`hand` / `offhand`）、掩码交并集与取反（`!air`、`#existing`、`#solid`、`#air`），输错方块名自动给出拼写纠错建议。
 - **区域编辑与几何生成**：填充（`/cx set`）、替换（`/cx replace`）、四壁（`/cx walls`）、六面外壳（`/cx faces` / `/cx outline`）、内部掏空（`/cx hollow`）、表层覆盖（`/cx overlay`）、中心点标记（`/cx center`）、选区移动与重复堆叠（`/cx move`、`/cx stack`），以及实心/空心的球体、椭球、圆柱、金字塔生成。
-- **剪贴板与原理图**：复制（`/cx copy`）、剪切（`/cx cut`）、粘贴（`/cx paste`），自动保留含水方块第二层、箱子/告示牌等方块实体 NBT（含大箱子配对修正），可选 `-e` 连同非玩家生物/实体一起复制粘贴；支持 `-p` 假方块粘贴预览、90° 倍数三维旋转（`/cx rotate`，自动换算楼梯/门/原木/铁轨/火把等朝向）与镜像翻转（`/cx flip`）；支持导出与导入 `.cxs` 和原版 `.mcstructure` 原理图（`/cx schem`）。
+- **剪贴板与原理图**：复制（`/cx copy`）、剪切（`/cx cut`）、粘贴（`/cx paste`），自动保留含水方块第二层、箱子/告示牌等方块实体 NBT（含大箱子配对修正），可选 `-e` 连同非玩家生物/实体一起复制粘贴；支持 `-p` 假方块粘贴预览、90° 倍数三维旋转（`/cx rotate`，自动换算楼梯/门/原木/铁轨/火把等朝向）与镜像翻转（`/cx flip`）；使用 `/cx schem export` 导出选区，使用 `/cx schem place` 直接放置结构，支持 `.mcstructure`、`.cxs`、WorldEdit `.schem` 和 Litematica `.litematic`。
 - **持久化历史与安全调度**：多步撤销与重做（`/cx undo`、`/cx redo`），支持查看历史列表（`/cx history`）与撤销指定玩家操作；超出内存上限的历史自动溢写至磁盘，重进游戏后历史、剪贴板与个人偏好依然保留；所有大体积操作按区块顺序分 tick 异步执行，配动作栏进度条、大操作弹窗二次确认、单次上限与方块黑名单保护。
 - **全图形化菜单与客户端增强**：`/cx menu` 或手持魔杖**蹲下右键**打开表单，覆盖选区、搜索方块、建造、变换、原理图全流程，手机触屏无需手打长命令；客户端安装后额外提供 `F6`–`F10` 可改键快捷键与动作栏实时状态 HUD。
 

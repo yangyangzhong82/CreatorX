@@ -5,8 +5,26 @@
 #include "mc/world/level/block/Block.h"
 #include <unordered_map>
 #include <cmath>
+#include <cctype>
 
 namespace creatorx::schematic {
+namespace {
+std::optional<FileFormat> fromExtension(std::u8string extension) {
+    std::ranges::transform(extension, extension.begin(), [](char8_t c) { return char8_t(std::tolower(c)); });
+    if (extension == u8".cxs") return FileFormat::cxs;
+    if (extension == u8".mcstructure") return FileFormat::mcstructure;
+    if (extension == u8".schem") return FileFormat::schem;
+    if (extension == u8".litematic") return FileFormat::litematic;
+    return {};
+}
+} // namespace
+
+FileFormat fileFormat(std::filesystem::path const& path) {
+    auto format = fromExtension(path.extension().u8string());
+    if (!format) throw std::runtime_error("unsupported schematic extension");
+    return *format;
+}
+
 CompoundTag serialize(edit::Clipboard const& clipboard, bool nativeEntities) {
     using storage::Nbt;
     CompoundTag root;
@@ -133,11 +151,15 @@ std::shared_ptr<edit::Clipboard const> deserialize(CompoundTag const& root) {
 }
 
 std::filesystem::path path(std::string name, std::string format) {
-    if (name.empty() || name == "." || name == ".." || name.find_first_of("/\\:") != std::string::npos) throw std::runtime_error("invalid schematic name");
-    if (format != "cxs" && format != "mcstructure") throw std::runtime_error("format must be cxs or mcstructure");
+    if (name.empty() || name.back() == '.' || name.back() == ' '
+        || name.find_first_of("/\\:\"<>|?*") != std::string::npos
+        || std::ranges::any_of(name, [](unsigned char c) { return c < 32; })) {
+        throw std::runtime_error("invalid schematic name");
+    }
+    if (!fromExtension(u8"." + std::u8string(format.begin(), format.end()))) throw std::runtime_error("unsupported schematic format");
     auto p = std::filesystem::path(std::u8string(name.begin(),name.end()));
     if (!p.has_extension()) p += "." + format;
-    if (p.extension() != ".cxs" && p.extension() != ".mcstructure") throw std::runtime_error("unsupported schematic extension");
+    fileFormat(p);
     return storage::dataDir() / "schematics" / p;
 }
 
@@ -147,8 +169,7 @@ std::vector<std::string> listFiles(std::string_view search) {
     std::vector<std::string> names;
     for (auto const& item : std::filesystem::directory_iterator(directory)) {
         if (!item.is_regular_file()) continue;
-        auto ext = item.path().extension();
-        if (ext != ".cxs" && ext != ".mcstructure") continue;
+        if (!fromExtension(item.path().extension().u8string())) continue;
         auto raw = item.path().filename().u8string();
         std::string name(raw.begin(), raw.end());
         if (name.find(search) != std::string::npos) names.push_back(std::move(name));

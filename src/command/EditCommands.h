@@ -12,6 +12,7 @@
 
 class Player;
 namespace creatorx::exec { class Job; }
+namespace creatorx::edit { struct Clipboard; }
 
 namespace creatorx {
 
@@ -35,6 +36,10 @@ bool regionEdit(
 bool replaceBlocks(Player& player, Feedback const& output, std::string_view text);
 bool copySelection(Player& player, Feedback const& output, bool cut, std::optional<std::string_view> pattern, std::optional<std::string_view> mask = {}, bool includeEntities = false);
 bool pasteClipboard(Player& player, Feedback const& output, PasteOptions options);
+bool placeStructure(
+    Player& player, Feedback const& output, std::shared_ptr<edit::Clipboard const> clipboard,
+    core::Vec3i min, bool skipAir, bool entities
+);
 bool confirmPastePreview(Player& player, Feedback const& output);
 bool pasteClipboardAtBrush(
     Player& player, Feedback const& output, core::Vec3i target, bool skipAir, bool original, std::optional<edit::Mask> mask

@@ -516,6 +516,14 @@ bool submitPaste(Player& player, Feedback const& output, PastePlacement placemen
 }
 } // namespace
 
+bool placeStructure(
+    Player& player, Feedback const& output, std::shared_ptr<edit::Clipboard const> clipboard,
+    core::Vec3i min, bool skipAir, bool entities
+) {
+    auto box = placementBox(player, output, min, {}, clipboard->size);
+    return box && submitPaste(player, output, {std::move(clipboard), min, skipAir, false, entities, {}}, *box, false);
+}
+
 bool pasteClipboardAtBrush(
     Player& player, Feedback const& output, core::Vec3i target, bool skipAir, bool original, std::optional<edit::Mask> mask
 ) {

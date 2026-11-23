@@ -11,8 +11,10 @@
 
 namespace creatorx::storage {
 namespace {
+void writeBytes(std::filesystem::path const& path, std::string_view bytes);
+
 struct Writer {
-    struct Task {std::filesystem::path path; NbtSource source; std::promise<void> result; std::vector<std::shared_future<void>> dependencies; std::string errorTemplate;};
+    struct Task {std::filesystem::path path; std::function<std::string()> source; std::promise<void> result; std::vector<std::shared_future<void>> dependencies; std::string errorTemplate;};
     struct Pending {
         size_t count = 0;
         std::shared_future<void> latest;
@@ -37,8 +39,7 @@ struct Writer {
             lock.unlock();
             try {
                 for(auto const& dependency:task.dependencies) dependency.get();
-                if (auto tag = std::get_if<CompoundTag>(&task.source)) writeNbt(task.path, *tag);
-                else writeNbt(task.path, std::get<std::function<CompoundTag()>>(task.source)());
+                writeBytes(task.path, task.source());
                 task.result.set_value();
             }
             catch(std::exception const& error) {task.result.set_exception(std::current_exception());logger.error(fmt::format(fmt::runtime(task.errorTemplate),error.what()));}
@@ -53,6 +54,14 @@ std::unique_ptr<Writer> writer;
 }
 void startStorage() {if(!writer) writer=std::make_unique<Writer>();}
 std::shared_future<void> queueNbt(std::filesystem::path path, NbtSource source, std::vector<std::shared_future<void>> dependencies) {
+    return queueBytes(std::move(path), [source = std::move(source)] {
+        if (auto tag = std::get_if<CompoundTag>(&source)) return tag->toBinaryNbt();
+        return std::get<std::function<CompoundTag()>>(source)().toBinaryNbt();
+    }, std::move(dependencies));
+}
+std::shared_future<void> queueBytes(
+    std::filesystem::path path, std::function<std::string()> source, std::vector<std::shared_future<void>> dependencies
+) {
     startStorage();
     Writer::Task task{path.lexically_normal().make_preferred(),std::move(source),{},std::move(dependencies),std::string(tr("storage.failed"))};
     auto result=task.result.get_future().share();
@@ -66,14 +75,14 @@ std::shared_future<void> queueNbt(std::filesystem::path path, NbtSource source, 
     writer->changed.notify_one();
     return result;
 }
+std::shared_future<void> pendingWrite(std::filesystem::path const& path) {
+    if (!writer) return {};
+    std::lock_guard lock(writer->mutex);
+    auto entry = writer->pending.find(path.lexically_normal().make_preferred());
+    return entry != writer->pending.end() ? entry->second.latest : std::shared_future<void>{};
+}
 void waitForWrite(std::filesystem::path const& path) {
-    if(!writer) return;
-    std::shared_future<void> latest;
-    {
-        std::lock_guard lock(writer->mutex);
-        auto entry = writer->pending.find(path.lexically_normal().make_preferred());
-        if (entry != writer->pending.end()) latest = entry->second.latest;
-    }
+    auto latest = pendingWrite(path);
     if (latest.valid()) latest.wait();
 }
 void stopStorage() {writer.reset();}
@@ -87,10 +96,13 @@ CompoundTag readNbt(std::filesystem::path const& path) {
     return std::move(*tag);
 }
 void writeNbt(std::filesystem::path const& path, CompoundTag const& tag) {
+    writeBytes(path, tag.toBinaryNbt());
+}
+namespace {
+void writeBytes(std::filesystem::path const& path, std::string_view bytes) {
     std::filesystem::create_directories(path.parent_path());
     auto temporary = path;
     temporary += ".tmp";
-    auto bytes = tag.toBinaryNbt();
     std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
     file.exceptions(std::ios::failbit | std::ios::badbit);
     file.write(bytes.data(), bytes.size());
@@ -99,4 +111,5 @@ void writeNbt(std::filesystem::path const& path, CompoundTag const& tag) {
         throw std::runtime_error("cannot replace " + path.string());
     }
 }
+} // namespace
 } // namespace creatorx::storage

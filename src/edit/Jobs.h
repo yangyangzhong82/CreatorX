@@ -26,6 +26,7 @@ std::unique_ptr<exec::Job> makeRegionEdit(
 );
 
 // 复制选区到剪贴板；cutPattern 有值时复制完成后再用它填充选区（剪切）。
+using CopyDestination = std::function<std::unique_ptr<exec::Job>(std::shared_ptr<Clipboard const>)>;
 std::unique_ptr<exec::Job> makeCopy(
     mce::UUID              owner,
     int                    dimension,
@@ -33,7 +34,8 @@ std::unique_ptr<exec::Job> makeCopy(
     core::Vec3i            offset,
     std::optional<Pattern> cutPattern,
     std::optional<Mask> mask = {},
-    bool includeEntities = false
+    bool includeEntities = false,
+    CopyDestination destination = {}
 );
 
 std::unique_ptr<exec::Job>

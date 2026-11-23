@@ -71,16 +71,17 @@ void openSchematicSearch(Player& player, std::string filter) {
 void openSchematicFile(Player& player, std::string name, std::string filter, size_t page) {
     ll::form::SimpleForm form(name);
     form.appendButton(text("menu.schem_load"));
+    form.appendButton(text("menu.schem_place"));
     form.appendButton(text("menu.schem_delete"));
     form.appendButton(text("menu.schem_browse"));
     form.sendTo(player, [name = std::move(name), filter = std::move(filter), page](
         Player& target, int selected, ll::form::FormCancelReason
     ) {
-        if (selected == 0) {
-            if (executeSchematic(target, Feedback(target), "load", name)) return;
+        if (selected == 0 || selected == 1) {
+            if (executeSchematic(target, Feedback(target), selected == 0 ? "load" : "place", name)) return;
             return openSchematicFile(target, name, filter, page);
         }
-        if (selected != 1) return openSchematicBrowser(target, filter, page);
+        if (selected != 2) return openSchematicBrowser(target, filter, page);
         ll::form::ModalForm confirm(
             text("menu.schem_delete"), tr("menu.schem_delete_confirm", name),
             text("menu.confirm_yes"), text("menu.confirm_no")
@@ -140,18 +141,19 @@ void openSchematicBrowser(Player& player, std::string filter, size_t page) {
     });
 }
 
-void openSchematicSave(Player& player, std::string name = {}, size_t format = 0, std::string const& error = {}) {
-    ll::form::CustomForm form(text("menu.schem_save"));
+void openSchematicSave(Player& player, bool selection, std::string name, size_t format, std::string const& error = {}) {
+    static const std::vector<std::string> formats{"cxs", "mcstructure", "schem", "litematic"};
+    ll::form::CustomForm form(text(selection ? "menu.schem_export" : "menu.schem_save"));
     if (!error.empty()) form.appendLabel("§c" + error + "§r");
     form.appendInput("name", text("menu.schem_name"), "house", name);
-    form.appendDropdown("format", text("menu.schem_format"), {"cxs", "mcstructure"}, format);
-    form.sendTo(player, [](Player& target, ll::form::CustomFormResult const& result, ll::form::FormCancelReason) {
+    form.appendDropdown("format", text("menu.schem_format"), formats, format);
+    form.sendTo(player, [selection](Player& target, ll::form::CustomFormResult const& result, ll::form::FormCancelReason) {
         if (!result) return openSchematicMenu(target);
         auto name = input(*result, "name");
-        auto format = number(*result, "format") ? 1u : 0u;
+        auto format = std::min(number(*result, "format"), formats.size() - 1);
         std::string message;
-        if (!executeSchematic(target, Feedback(target, &message), "save", name, format ? "mcstructure" : "cxs")) {
-            openSchematicSave(target, std::move(name), format, message);
+        if (!executeSchematic(target, Feedback(target, &message), selection ? "export" : "save", name, formats[format])) {
+            openSchematicSave(target, selection, std::move(name), format, message);
         }
     });
 }
@@ -161,11 +163,13 @@ void openSchematicMenu(Player& player) {
     ll::form::SimpleForm form(text("menu.schematics"));
     bool canSave = bool(getSession(player).clipboard);
     form.appendButton(text("menu.schem_browse"));
+    form.appendButton(text("menu.schem_export"));
     if (canSave) form.appendButton(text("menu.schem_save"));
     form.appendButton(text("menu.clipboard"));
     form.sendTo(player, [canSave](Player& target, int selected, ll::form::FormCancelReason) {
         if (selected == 0) return openSchematicBrowser(target);
-        if (selected == 1 && canSave) return openSchematicSave(target);
+        if (selected == 1) return openSchematicSave(target, true, {}, 1);
+        if (selected == 2 && canSave) return openSchematicSave(target, false, {}, 0);
         openClipboardRoot(target);
     });
 }
