@@ -266,7 +266,7 @@ void registerEditCommand(ll::command::CommandHandle& handle, std::string_view na
             .execute([](Origin origin, Output output, OptionalPatternParams const& args) {
                 auto* player = getCommandPlayer(origin, output);
                 if (!player) return;
-                std::optional<std::string_view> pattern;
+                std::string pattern;
                 std::optional<std::string_view> mask;
                 bool entities=false;
                 if(args.pattern) {
@@ -277,11 +277,14 @@ void registerEditCommand(ll::command::CommandHandle& handle, std::string_view na
                         else if(tokens[i]=="-m") {
                             if(++i>=tokens.size()) {output.error(tr("mask.empty"));return;}
                             mask=text.substr(tokens[i].data()-text.data()); break;
-                        } else if(!pattern) pattern=tokens[i];
-                        else {output.error(tr("edit.replace_usage"));return;}
+                        } else {
+                            if (!pattern.empty()) pattern += ' ';
+                            pattern += tokens[i];
+                        }
                     }
                 }
-                copySelection(*player, output, true, pattern,mask,entities);
+                auto patternText = pattern.empty() ? std::nullopt : std::optional<std::string_view>{pattern};
+                copySelection(*player, output, true, patternText, mask, entities);
             });
     } else if (name == "paste") {
         subOverload<FlagsParams>(handle, name, subcommand)

@@ -22,6 +22,8 @@
 #include <cmath>
 #include <map>
 #include <future>
+#include <limits>
+#include <utility>
 
 namespace creatorx {
 struct AdvancedArgs { ll::command::Optional<CommandRawText> arguments; };
@@ -43,6 +45,26 @@ int integer(std::string_view value, int min = 1, int max = 512) {
     if (ec != std::errc{} || end != value.data() + value.size() || result < min || result > max) throw std::runtime_error(tr("advanced.bad_number", min, max));
     return result;
 }
+
+core::Vec3i selectionCenter(core::Box const& box) {
+    auto middle = [](int min, int max) { return int((std::int64_t(min) + max) / 2); };
+    return {middle(box.min.x, box.max.x), middle(box.min.y, box.max.y), middle(box.min.z, box.max.z)};
+}
+
+core::Box shapeBounds(core::Vec3i center, int rx, int rz, int bottom, int top) {
+    auto offset = [](int coordinate, int delta) {
+        auto value = std::int64_t(coordinate) + delta;
+        if (!std::in_range<int>(value) || value == std::numeric_limits<int>::max()) {
+            throw std::runtime_error(std::string(tr("advanced.shape_coordinates")));
+        }
+        return int(value);
+    };
+    return {
+        {offset(center.x, -rx), offset(center.y, bottom), offset(center.z, -rz)},
+        {offset(center.x, rx), offset(center.y, top), offset(center.z, rz)}
+    };
+}
+
 class SchematicJob final : public exec::Job {
 public:
     SchematicJob(mce::UUID owner,std::future<CompoundTag> read) : mOwner(owner),mRead(std::move(read)) {}
@@ -90,14 +112,14 @@ bool runSchematic(Player& player, Feedback const& output, std::string_view actio
         job = std::make_unique<SchematicJob>(player.getUuid(), std::move(write));
     } else if (action == "load") {
         getSession(player);
-        storage::flushWrites();
+        storage::waitForWrite(path);
         if (!std::filesystem::is_regular_file(path)) throw std::runtime_error(std::string(tr("schematic.missing")));
         if (std::filesystem::file_size(path) > 256ull * 1024 * 1024) throw std::runtime_error(std::string(tr("schematic.too_large")));
         job = std::make_unique<SchematicJob>(
             player.getUuid(), std::async(std::launch::async, [path] { return storage::readNbt(path); })
         );
     } else if (action == "delete") {
-        storage::flushWrites();
+        storage::waitForWrite(path);
         if (!std::filesystem::remove(path)) throw std::runtime_error(std::string(tr("schematic.missing")));
         output.success(tr("schematic.done"));
         return true;
@@ -124,13 +146,22 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
         if (std::abs(view.y) >= std::max(std::abs(view.x),std::abs(view.z))) dir.y = view.y > 0 ? 1 : -1;
         else if (std::abs(view.x) >= std::abs(view.z)) dir.x = view.x > 0 ? 1 : -1;
         else dir.z = view.z > 0 ? 1 : -1;
-        bool skipAir = false, select = false;
+        bool skipAir = false, select = false, includeEntities = false;
+        std::optional<edit::Mask> mask;
         for (;cursor<tokens.size();++cursor) {
             auto token = tokens[cursor];
             if (token == "north") dir={0,0,-1}; else if (token=="south") dir={0,0,1};
             else if (token=="east") dir={1,0,0}; else if(token=="west") dir={-1,0,0};
             else if(token=="up") dir={0,1,0}; else if(token=="down") dir={0,-1,0};
             else if(token=="-a") skipAir=true; else if(token=="-s") select=true;
+            else if (token == "-e") includeEntities = true;
+            else if (token == "-m") {
+                if (++cursor == tokens.size()) throw std::runtime_error(std::string(tr("mask.empty")));
+                std::string error;
+                mask = edit::Mask::parse(raw.substr(tokens[cursor].data() - raw.data()), player, error);
+                if (!mask) throw std::runtime_error(error);
+                break;
+            }
             else throw std::runtime_error(std::string(tr("advanced.transfer_usage")));
         }
         auto source=*selection->box();
@@ -143,7 +174,9 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
         auto const& height=*player.getDimension().mHeightRange;
         if(destination.min.y<height.mMin || destination.max.y>=height.mMax) throw std::runtime_error(std::string(tr("clipboard.out_of_height")));
         auto changed=source.volume()*(copies+(move ? 1 : 0));
-        auto job=edit::makeTransfer(player.getUuid(),player.getDimensionId(),source,offset,copies,move,skipAir);
+        auto job = edit::makeTransfer(
+            player.getUuid(), player.getDimensionId(), source, offset, copies, move, skipAir, std::move(mask), includeEntities
+        );
         std::function<void(Player&)> follow;
         if(select) follow=[destination](Player& target) {selectBox(target,destination);};
         submitEditJob(player,output,std::move(job),changed,std::move(follow));
@@ -184,10 +217,10 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
         }
         return;
     }
-    auto feet = player.getFeetBlockPos();
     core::Box box;
     edit::EditFilter filter;
     std::string_view patternText;
+    std::string_view maskText;
     if (name == "hollow" || name == "overlay" || name == "center") {
         auto selection = completeSelection(player, output);
         if (!selection) return;
@@ -203,8 +236,8 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
             };
         } else if (name == "center") {
             patternText = raw;
-            auto low = core::Vec3i{int((std::int64_t(box.min.x) + box.max.x) / 2), int((std::int64_t(box.min.y) + box.max.y) / 2), int((std::int64_t(box.min.z) + box.max.z) / 2)};
-            box = {low, low};
+            auto center = selectionCenter(box);
+            box = {center, center};
             filter = [](BlockSource&, core::Vec3i) { return true; };
         } else {
             patternText = raw;
@@ -225,34 +258,53 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
         while(argument<tokens.size() && tokens[argument-1].ends_with(',')) ++argument;
         if (tokens.size() <= argument) throw std::runtime_error(std::string(tr("advanced.shape_usage")));
         patternText=raw.substr(0,tokens[argument].data()-raw.data());
+        auto extent = tokens[argument++];
+        bool sphere = name == "sphere" || name == "hsphere";
+        bool cylinder = name == "cyl" || name == "hcyl";
         bool hollow = name.starts_with('h');
-        if (name == "sphere" || name == "hsphere" || name == "cyl" || name == "hcyl") {
+        int height = 1;
+        if (cylinder && argument < tokens.size() && !tokens[argument].starts_with('-')) {
+            height = integer(tokens[argument++], 1, 2048);
+        }
+        bool raised = false, atSelection = false;
+        for (; argument < tokens.size(); ++argument) {
+            auto flag = tokens[argument];
+            if (flag == "-c") atSelection = true;
+            else if (flag == "-r" && sphere) raised = true;
+            else if (flag == "-m") {
+                if (++argument == tokens.size()) throw std::runtime_error(std::string(tr("mask.empty")));
+                maskText = raw.substr(tokens[argument].data() - raw.data());
+                break;
+            } else throw std::runtime_error(std::string(tr("advanced.shape_usage")));
+        }
+        auto feet = player.getFeetBlockPos();
+        core::Vec3i center{feet.x, feet.y, feet.z};
+        if (atSelection) {
+            auto* selection = completeSelection(player, output);
+            if (!selection) return;
+            center = selectionCenter(*selection->box());
+        }
+        if (sphere || cylinder) {
             std::vector<int> radii;
-            auto values = tokens[argument];
+            auto values = extent;
             for (;;) {
                 auto comma = values.find(',');
                 radii.push_back(integer(values.substr(0, comma)));
                 if (comma == std::string_view::npos) break;
                 values.remove_prefix(comma + 1);
             }
-            bool sphere = name == "sphere" || name == "hsphere";
             if (radii.size() > (sphere ? 3u : 2u)) throw std::runtime_error(std::string(tr("advanced.shape_usage")));
             int rx = radii[0], ry = sphere && radii.size() > 1 ? radii[1] : radii[0];
             int rz = radii.size() > (sphere ? 2u : 1u) ? radii.back() : radii[0];
-            int height = !sphere && tokens.size() > argument+1 ? integer(tokens[argument+1], 1, 2048) : 1;
-            int cy = feet.y;
-            if (sphere && tokens.size() > argument+1) {
-                if(tokens[argument+1]!="-r") throw std::runtime_error(std::string(tr("advanced.shape_usage")));
-                cy+=ry;
-            }
-            if(tokens.size()>argument+2) throw std::runtime_error(std::string(tr("advanced.shape_usage")));
-            box = {{feet.x-rx, sphere ? cy-ry : cy, feet.z-rz}, {feet.x+rx, sphere ? cy+ry : cy+height-1, feet.z+rz}};
+            int cy = raised ? ry : 0;
+            box = shapeBounds(center, rx, rz, sphere ? cy - ry : 0, sphere ? cy + ry : height - 1);
             auto inside = [=](core::Vec3i p) {
-                double x = double(p.x-feet.x)/(rx+0.5), z = double(p.z-feet.z)/(rz+0.5);
+                double x = double(p.x)/(rx+0.5), z = double(p.z)/(rz+0.5);
                 double y = sphere ? double(p.y-cy)/(ry+0.5) : 0;
                 return x*x+y*y+z*z <= 1;
             };
             filter = [=](BlockSource&, core::Vec3i p) {
+                p = p - center;
                 if (!inside(p)) return false;
                 if (!hollow) return true;
                 return !inside(p+core::Vec3i{1,0,0}) || !inside(p+core::Vec3i{-1,0,0})
@@ -260,12 +312,12 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
                     || (sphere && (!inside(p+core::Vec3i{0,1,0}) || !inside(p+core::Vec3i{0,-1,0})));
             };
         } else {
-            int layers = integer(tokens[argument]);
-            if(tokens.size()>argument+1) throw std::runtime_error(std::string(tr("advanced.shape_usage")));
-            box = {{feet.x-layers+1,feet.y,feet.z-layers+1},{feet.x+layers-1,feet.y+layers-1,feet.z+layers-1}};
+            int layers = integer(extent);
+            box = shapeBounds(center, layers - 1, layers - 1, 0, layers - 1);
             filter = [=](BlockSource&, core::Vec3i p) {
-                int extent = layers - 1 - (p.y-feet.y);
-                int distance = std::max(std::abs(p.x-feet.x), std::abs(p.z-feet.z));
+                p = p - center;
+                int extent = layers - 1 - p.y;
+                int distance = std::max(std::abs(p.x), std::abs(p.z));
                 return hollow ? distance == extent : distance <= extent;
             };
         }
@@ -276,9 +328,17 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
     std::string error;
     auto pattern = edit::Pattern::parse(patternText, player, error);
     if (!pattern) throw std::runtime_error(error);
+    if (!maskText.empty()) {
+        auto mask = edit::Mask::parse(maskText, player, error);
+        if (!mask) throw std::runtime_error(error);
+        filter = [shape = std::move(filter), mask = std::move(*mask)](BlockSource& region, core::Vec3i p) {
+            return shape(region, p) && mask.test(region.getBlock({p.x, p.y, p.z}));
+        };
+    }
     auto job = edit::makeComputedEdit(player.getUuid(), player.getDimensionId(), box, std::move(*pattern), std::move(filter), std::string(name));
-    submitEditJob(player, output, std::move(job), box.volume(), [pattern = std::string(patternText)](Player& target) {
+    submitEditJob(player, output, std::move(job), box.volume(), [pattern = std::string(patternText), mask = std::string(maskText)](Player& target) {
         if (pattern != "hand" && pattern != "offhand") rememberRecent(getSession(target).recentPatterns, pattern);
+        if (!mask.empty()) rememberRecent(getSession(target).recentMasks, mask);
     });
 }
 void registerCommands(CommandRegistry& registry) {

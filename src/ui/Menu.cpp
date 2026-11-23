@@ -16,6 +16,9 @@
 #include "ll/api/form/CustomForm.h"
 #include "ll/api/form/ModalForm.h"
 #include "ll/api/form/SimpleForm.h"
+#include "mc/server/commands/CommandPosition.h"
+#include "mc/server/commands/CurrentCmdVersion.h"
+#include "mc/server/commands/PlayerCommandOrigin.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/item/ItemStack.h"
 #include "mc/world/level/block/Block.h"
@@ -26,6 +29,7 @@
 #include <charconv>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -208,16 +212,40 @@ void selectionAction(Player& player, Action action) {
 
 // ---- 选区 ----
 
-std::optional<core::Vec3i> parseCoords(std::string_view value, BlockPos const& feet) {
+std::optional<core::Vec3i> parseCoords(std::string_view value, Player& player) {
     std::vector<std::string_view> parts;
     size_t                        start = 0;
     for (size_t i = 0; i <= value.size(); ++i) {
-        if (i == value.size() || value[i] == ' ' || value[i] == ',') {
+        if (i == value.size() || value[i] == ' ' || value[i] == '\t' || value[i] == ',') {
             if (i > start) parts.push_back(value.substr(start, i - start));
             start = i + 1;
         }
     }
     if (parts.size() != 3) return std::nullopt;
+    if (parts.front().starts_with('^')) {
+        std::array<float, 3> offsets{};
+        for (size_t axis = 0; axis < offsets.size(); ++axis) {
+            auto part = parts[axis];
+            if (!part.starts_with('^')) return std::nullopt;
+            part.remove_prefix(1);
+            if (part.empty()) continue;
+            auto [end, ec] = std::from_chars(part.data(), part.data() + part.size(), offsets[axis]);
+            if (ec != std::errc{} || end != part.data() + part.size()) return std::nullopt;
+        }
+        CommandPosition position{};
+        position.mOffset = Vec3{offsets[0], offsets[1], offsets[2]};
+        position.mLocal = position.mRelativeX = position.mRelativeY = position.mRelativeZ = true;
+        PlayerCommandOrigin origin(player.getLevel(), player.getOrCreateUniqueID());
+        auto world = position.getPosition(static_cast<int>(CurrentCmdVersion::Latest), origin, Vec3{0, 0, 0}) + 0.001f;
+        for (double coordinate : {world.x, world.y, world.z}) {
+            if (!(coordinate >= std::numeric_limits<int>::min() && coordinate <= std::numeric_limits<int>::max())) {
+                return std::nullopt;
+            }
+        }
+        BlockPos block = world;
+        return core::Vec3i{block.x, block.y, block.z};
+    }
+    auto feet = player.getFeetBlockPos();
     std::array<int, 3> base{feet.x, feet.y, feet.z};
     std::array<int, 3> result{};
     for (size_t axis = 0; axis < 3; ++axis) {
@@ -229,7 +257,9 @@ std::optional<core::Vec3i> parseCoords(std::string_view value, BlockPos const& f
             auto [end, ec] = std::from_chars(part.data(), part.data() + part.size(), offset);
             if (ec != std::errc{} || end != part.data() + part.size()) return std::nullopt;
         }
-        result[axis] = relative ? base[axis] + offset : offset;
+        auto coordinate = std::int64_t(offset) + (relative ? base[axis] : 0);
+        if (!std::in_range<int>(coordinate)) return std::nullopt;
+        result[axis] = int(coordinate);
     }
     return core::Vec3i{result[0], result[1], result[2]};
 }
@@ -248,9 +278,8 @@ void openCoordsForm(Player& player, std::string first, std::string second, std::
         if (!result) return openSelectionMenu(target);
         auto firstText  = inputText(*result, "first");
         auto secondText = inputText(*result, "second");
-        auto feet       = target.getFeetBlockPos();
-        auto first      = parseCoords(firstText, feet);
-        auto second     = parseCoords(secondText, feet);
+        auto first      = parseCoords(firstText, target);
+        auto second     = parseCoords(secondText, target);
         if (!first || !second) {
             return openCoordsForm(target, firstText, secondText, text("menu.coords_invalid"));
         }
@@ -389,6 +418,10 @@ void openBuildOperation(
     }
     if (cylinder) form.appendInput("height", text("menu.height"), "10", saved.contains("height") ? inputText(saved, "height") : "10");
     if (sphere) form.appendToggle("raised", text("menu.build_raised"), number(saved, "raised") != 0);
+    if (sphere || cylinder || pyramid) {
+        form.appendToggle("center", text("menu.build_selection_center"), number(saved, "center") != 0);
+        form.appendInput("mask", text("menu.build_mask"), "#air", inputText(saved, "mask"));
+    }
     if (transfer) {
         form.appendDropdown("direction", text("menu.resize_direction"),
             {text("menu.dir_me"), text("menu.dir_up"), text("menu.dir_down"), text("menu.dir_north"),
@@ -417,6 +450,9 @@ void openBuildOperation(
             args = pattern + " " + amount;
             if (cylinder) args += " " + inputText(*result, "height");
             if (sphere && number(*result, "raised")) args += " -r";
+            if (number(*result, "center")) args += " -c";
+            auto mask = inputText(*result, "mask");
+            if (!trim(mask).empty()) args += " -m " + mask;
         }
         if (transfer) {
             args = amount + " " + directions[std::min(index(*result, "direction"), directions.size() - 1)];

@@ -54,9 +54,10 @@ PlayerSession& getSession(mce::UUID const& uuid);
 PlayerSession* findSession(mce::UUID const& uuid);
 bool           hasSessions();
 void saveSession(mce::UUID const& uuid);
+void closeSession(mce::UUID const& uuid);
 void saveClipboard(mce::UUID const& uuid);
 
-// 玩家退出时先结束其任务，再丢弃会话。
+// 玩家退出时取消其发起的任务；被其他玩家操作的历史保留至任务结束。
 void enableSessions();
 void disableSessions();
 

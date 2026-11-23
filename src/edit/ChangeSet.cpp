@@ -4,17 +4,20 @@
 #include "storage/Nbt.h"
 #include <chrono>
 #include <atomic>
+#include <optional>
 #include <fmt/chrono.h>
 
 #include "mc/deps/nbt/CompoundTag.h"
 #include "mc/world/item/SaveContext.h"
 #include "mc/world/level/BlockPos.h"
 #include "mc/world/level/BlockSource.h"
+#include "mc/world/level/ChunkPos.h"
 #include "mc/world/level/block/Block.h"
 #include "mc/world/level/block/BlockChangeContext.h"
 #include "mc/world/level/block/BlockType.h"
 #include "mc/world/level/block/actor/BlockActor.h"
 #include "mc/world/level/block/actor/BlockActorType.h"
+#include "mc/world/level/chunk/ChunkSource.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/legacy/ActorUniqueID.h"
@@ -22,8 +25,39 @@
 namespace creatorx::edit {
 namespace {
 
-// S1 未验证前的约定：1 = 通知邻居，2 = 同步客户端。关闭物理时只同步，不触发沙子下落、水流等更新。
-int updateFlags() { return config.performance.physics ? 3 : 2; }
+std::optional<core::Vec3i> secondPartOffset(Block const& block) {
+    auto const& tag = *block.mSerializationId;
+    if (!tag.contains("states")) return std::nullopt;
+    auto const& states = tag["states"].get<CompoundTag>();
+    if (states.contains("upper_block_bit")) return core::Vec3i{0, bool(states["upper_block_bit"]) ? -1 : 1, 0};
+    if (states.contains("head_piece_bit") && states.contains("direction")) {
+        static constexpr core::Vec3i direction[]{{0,0,1}, {-1,0,0}, {0,0,-1}, {1,0,0}};
+        auto offset = direction[int(states["direction"]) & 3];
+        return bool(states["head_piece_bit"]) ? core::Vec3i{} - offset : offset;
+    }
+    return std::nullopt;
+}
+
+std::optional<bool> hasSecondPart(BlockSource& region, core::Vec3i pos, Block const& block, core::Vec3i offset) {
+    auto other = pos + offset;
+    BlockPos otherPos{other.x, other.y, other.z};
+    if (((pos.x >> 4) != (other.x >> 4) || (pos.z >> 4) != (other.z >> 4))
+        && !region.getChunkSource().getAvailableChunk(ChunkPos{otherPos})) return std::nullopt;
+    auto const& adjacent = region.getBlock(otherPos);
+    return &adjacent.getBlockType() == &block.getBlockType()
+        && secondPartOffset(adjacent) == core::Vec3i{} - offset;
+}
+
+int updateFlags(BlockSource& region, core::Vec3i pos, Block const& oldBlock, Block const& newBlock) {
+    // 1 通知邻居，2 同步客户端。第一半拆除或就位时先只同步。
+    if (!config.performance.physics) return 2;
+    auto oldOffset = secondPartOffset(oldBlock);
+    auto newOffset = secondPartOffset(newBlock);
+    bool samePart = &oldBlock.getBlockType() == &newBlock.getBlockType() && oldOffset == newOffset;
+    if (oldOffset && !samePart && hasSecondPart(region, pos, oldBlock, *oldOffset).value_or(true)) return 2;
+    if (newOffset && !hasSecondPart(region, pos, newBlock, *newOffset).value_or(false)) return 2;
+    return 3;
+}
 
 } // namespace
 
@@ -161,6 +195,7 @@ ChangeSet ChangeSet::fromReference(CompoundTag const& tag) {
 
 void ChangeSet::ensureLoaded() {
     if (mPool) return;
+    if (mWrite.valid()) mWrite.get();
     auto path = mDiskPath;
     auto restored = deserialize(storage::readNbt(path));
     restored.mStoredSize = restored.size();
@@ -276,7 +311,7 @@ bool writeBlock(
         changes->record(p, oldBlock, oldExtra, std::move(oldEntity), block, extra, entity);
     }
 
-    int                flags = updateFlags();
+    int                flags = updateFlags(region, p, oldBlock, block);
     BlockChangeContext context{};
     if (entity) {
         auto actor = BlockActor::create(*entity, pos);

@@ -6,23 +6,34 @@
 #include <mutex>
 #include <condition_variable>
 #include <deque>
+#include <map>
 #include "mod/Global.h"
 
 namespace creatorx::storage {
 namespace {
 struct Writer {
     struct Task {std::filesystem::path path; NbtSource source; std::promise<void> result; std::vector<std::shared_future<void>> dependencies; std::string errorTemplate;};
+    struct Pending {
+        size_t count = 0;
+        std::shared_future<void> latest;
+    };
+    struct PathLess {
+        bool operator()(std::filesystem::path const& a, std::filesystem::path const& b) const {
+            return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_LESS_THAN;
+        }
+    };
     std::mutex mutex;
-    std::condition_variable changed, idle;
+    std::condition_variable changed;
     std::deque<Task> queue;
-    bool stopping=false, busy=false;
+    std::map<std::filesystem::path, Pending, PathLess> pending;
+    bool stopping=false;
     std::thread worker;
     Writer() : worker([this] {
         std::unique_lock lock(mutex);
         for(;;) {
             changed.wait(lock,[&] {return stopping || !queue.empty();});
             if(queue.empty() && stopping) break;
-            auto task=std::move(queue.front()); queue.pop_front(); busy=true;
+            auto task=std::move(queue.front()); queue.pop_front();
             lock.unlock();
             try {
                 for(auto const& dependency:task.dependencies) dependency.get();
@@ -31,8 +42,9 @@ struct Writer {
                 task.result.set_value();
             }
             catch(std::exception const& error) {task.result.set_exception(std::current_exception());logger.error(fmt::format(fmt::runtime(task.errorTemplate),error.what()));}
-            lock.lock(); busy=false;
-            if(queue.empty()) idle.notify_all();
+            lock.lock();
+            auto entry = pending.find(task.path);
+            if (--entry->second.count == 0) pending.erase(entry);
         }
     }) {}
     ~Writer() { {std::lock_guard lock(mutex);stopping=true;} changed.notify_one(); if(worker.joinable()) worker.join(); }
@@ -42,21 +54,31 @@ std::unique_ptr<Writer> writer;
 void startStorage() {if(!writer) writer=std::make_unique<Writer>();}
 std::shared_future<void> queueNbt(std::filesystem::path path, NbtSource source, std::vector<std::shared_future<void>> dependencies) {
     startStorage();
-    Writer::Task task{std::move(path),std::move(source),{},std::move(dependencies),std::string(tr("storage.failed"))};
+    Writer::Task task{path.lexically_normal().make_preferred(),std::move(source),{},std::move(dependencies),std::string(tr("storage.failed"))};
     auto result=task.result.get_future().share();
-    {std::lock_guard lock(writer->mutex);writer->queue.push_back(std::move(task));}
+    {
+        std::lock_guard lock(writer->mutex);
+        auto& pending = writer->pending[task.path];
+        writer->queue.push_back(std::move(task));
+        ++pending.count;
+        pending.latest = result;
+    }
     writer->changed.notify_one();
     return result;
 }
-void flushWrites() {
+void waitForWrite(std::filesystem::path const& path) {
     if(!writer) return;
-    std::unique_lock lock(writer->mutex);
-    writer->idle.wait(lock,[] {return writer->queue.empty() && !writer->busy;});
+    std::shared_future<void> latest;
+    {
+        std::lock_guard lock(writer->mutex);
+        auto entry = writer->pending.find(path.lexically_normal().make_preferred());
+        if (entry != writer->pending.end()) latest = entry->second.latest;
+    }
+    if (latest.valid()) latest.wait();
 }
 void stopStorage() {writer.reset();}
 std::filesystem::path dataDir() { return Entry::getInstance().getSelf().getDataDir(); }
 CompoundTag readNbt(std::filesystem::path const& path) {
-    flushWrites();
     std::ifstream file(path, std::ios::binary);
     if (!file) throw std::runtime_error("cannot open " + path.string());
     std::string bytes((std::istreambuf_iterator<char>(file)), {});

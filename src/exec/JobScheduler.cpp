@@ -117,13 +117,22 @@ std::optional<unsigned> jobPercent(mce::UUID const& uuid) {
     return unsigned(std::min(it->job->progress(), total) * 100 / total);
 }
 
-bool cancelJob(mce::UUID const& uuid) {
-    auto it = std::ranges::find_if(jobs, [&](Running const& running) { return running.owner == uuid || running.requester==uuid; });
+static bool cancelJob(std::vector<Running>::iterator it) {
     if (it == jobs.end()) return false;
     auto cancelled = std::move(*it);
     jobs.erase(it);
     cancelled.job->finish(playerOf(cancelled.requester), JobEnd::cancelled);
     return true;
+}
+
+bool cancelJob(mce::UUID const& uuid) {
+    return cancelJob(std::ranges::find_if(jobs, [&](Running const& running) {
+        return running.owner == uuid || running.requester == uuid;
+    }));
+}
+
+bool cancelRequestedJob(mce::UUID const& uuid) {
+    return cancelJob(std::ranges::find(jobs, uuid, &Running::requester));
 }
 
 void enableScheduler() {

@@ -46,6 +46,9 @@ using EditFilter = std::function<bool(BlockSource&, core::Vec3i)>;
 std::unique_ptr<exec::Job> makeComputedEdit(mce::UUID owner, int dimension, core::Box box, Pattern pattern, EditFilter filter, std::string label);
 std::unique_ptr<exec::Job> makeInspect(mce::UUID owner, int dimension, core::Box box, std::optional<Mask> mask);
 std::unique_ptr<exec::Job> makeClipboardInspect(mce::UUID owner,std::shared_ptr<Clipboard const> clipboard);
-std::unique_ptr<exec::Job> makeTransfer(mce::UUID owner, int dimension, core::Box source, core::Vec3i offset, int copies, bool move, bool skipAir);
+std::unique_ptr<exec::Job> makeTransfer(
+    mce::UUID owner, int dimension, core::Box source, core::Vec3i offset, int copies,
+    bool move, bool skipAir, std::optional<Mask> mask, bool includeEntities
+);
 
 } // namespace creatorx::edit

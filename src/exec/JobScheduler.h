@@ -61,6 +61,7 @@ bool hasJob(mce::UUID const& uuid);
 // 玩家当前任务的进度百分比；没有任务时为空。
 std::optional<unsigned> jobPercent(mce::UUID const& uuid);
 bool cancelJob(mce::UUID const& uuid);
+bool cancelRequestedJob(mce::UUID const& uuid);
 
 void enableScheduler();
 void disableScheduler();

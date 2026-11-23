@@ -21,7 +21,7 @@ CompoundTag readNbt(std::filesystem::path const& path);
 void writeNbt(std::filesystem::path const& path, CompoundTag const& tag);
 using NbtSource = std::variant<CompoundTag, std::function<CompoundTag()>>;
 std::shared_future<void> queueNbt(std::filesystem::path path, NbtSource source, std::vector<std::shared_future<void>> dependencies = {});
-void flushWrites();
+void waitForWrite(std::filesystem::path const& path);
 void stopStorage();
 void startStorage();
 } // namespace creatorx::storage

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <numbers>
 #include "mc/world/level/block/Block.h"
+#include "mc/world/level/block/actor/BlockActorType.h"
 #include "storage/Nbt.h"
 
 namespace creatorx::edit {
@@ -24,12 +25,22 @@ core::Vec3i rotate(core::Vec3i v,int turns,int axis) {
     }
     return v;
 }
+
+double transformYaw(double yaw, int turns, int flipAxis, int axis) {
+    if (axis == 1) yaw += 90 * turns;
+    if (flipAxis == 0 || (axis == 2 && turns == 2)) yaw = -yaw;
+    if (flipAxis == 2 || (axis == 0 && turns == 2)) yaw = 180 - yaw;
+    yaw = std::fmod(yaw, 360);
+    return yaw < 0 ? yaw + 360 : yaw;
+}
+
 Block const* transformBlock(Block const* block, int turns, int flipAxis, int axis) {
     if (!block) return nullptr;
     auto tag = *block->mSerializationId;
     if (!tag.contains("states")) return block;
     auto& states = tag["states"].get<CompoundTag>();
-    if(axis!=1 && (turns&1) && (states.contains("top_slot_bit") || states.contains("upside_down_bit") || states.contains("upper_block_bit"))) {
+    if (axis != 1 && (turns & 1) && (states.contains("top_slot_bit") || states.contains("upside_down_bit")
+        || states.contains("upper_block_bit") || states.contains("head_piece_bit"))) {
         throw std::runtime_error("this block has no sideways variant: "+block->getTypeName());
     }
     auto direction = [&](int value, int type) {
@@ -96,9 +107,7 @@ Block const* transformBlock(Block const* block, int turns, int flipAxis, int axi
             if (key == "weirdo_direction") changed = direction(original,5);
             if (key == "ground_sign_direction") {
                 if(axis!=1 && turns) throw std::runtime_error("standing signs require Y rotation");
-                changed = (original + turns*4) % 16;
-                if (flipAxis == 0) changed = (16-changed)%16;
-                if (flipAxis == 2) changed = (8-changed+16)%16;
+                changed = int(transformYaw(original * 22.5, turns, flipAxis, axis) / 22.5);
             }
             if(key=="rail_direction") {
                 if(axis!=1 && turns) throw std::runtime_error("rails require Y rotation");
@@ -146,6 +155,10 @@ std::shared_ptr<Clipboard const> transform(Clipboard const& source, core::Vec3i 
                 auto entity = source.entities.find(source.index(old));
                 if (entity != source.entities.end()) {
                     auto tag = entity->second;
+                    if (cell.block && cell.block->getBlockType().mBlockEntityType == BlockActorType::Skull
+                        && tag.contains("Rotation") && tag["Rotation"].is_number() && (axis == 1 || !(turns & 1))) {
+                        tag["Rotation"] = float(transformYaw(double(tag["Rotation"]), turns, flipAxis, axis));
+                    }
                     if(tag.contains("pairx") && tag.contains("pairz") && tag.contains("x") && tag.contains("z")) {
                         auto pair=map(core::Vec3i{old.x+int(tag["pairx"])-int(tag["x"]),old.y,old.z+int(tag["pairz"])-int(tag["z"])});
                         tag["pairx"]=pair.x; tag["pairz"]=pair.z;

@@ -46,8 +46,8 @@ PlayerSession& getSession(mce::UUID const& uuid) {
             for(unsigned char ch:level->getLevelId()) it->second.world+=fmt::format("{:02x}",ch);
         }
         if(it->second.world.empty()) it->second.world="default";
-        storage::flushWrites();
         auto path = storage::dataDir() / "players" / it->second.world / (uuid.asString() + ".nbt");
+        storage::waitForWrite(path);
         if (std::filesystem::exists(path)) {
             try {
                 auto tag = storage::readNbt(path);
@@ -67,14 +67,15 @@ PlayerSession& getSession(mce::UUID const& uuid) {
                 logger.error(tr("storage.failed", e.what()));
             }
         }
-    }
         auto clipboardPath=storage::dataDir()/"players"/it->second.world/(uuid.asString()+".clipboard.nbt");
-        if(inserted && std::filesystem::exists(clipboardPath)) {
+        storage::waitForWrite(clipboardPath);
+        if(std::filesystem::exists(clipboardPath)) {
             try {
                 auto tag=storage::readNbt(clipboardPath);
                 if(bool(tag["present"])) it->second.clipboard=schematic::deserialize(tag["clipboard"].get<CompoundTag>());
             } catch(std::exception const& error) {logger.error(tr("storage.failed",error.what()));}
         }
+    }
     return it->second;
 }
 
@@ -119,6 +120,11 @@ PlayerSession* findSession(mce::UUID const& uuid) {
 
 bool hasSessions() { return !sessions.empty(); }
 
+void closeSession(mce::UUID const& uuid) {
+    saveSession(uuid);
+    sessions.erase(uuid);
+}
+
 void enableSessions() {
     storage::startStorage();
     spillListener = ll::event::EventBus::getInstance().emplaceListener<ll::event::ServerLevelTickEvent>([](auto&) {
@@ -144,9 +150,8 @@ void enableSessions() {
     disconnectListener =
         ll::event::EventBus::getInstance().emplaceListener<ll::event::PlayerDisconnectEvent>([](auto& event) {
             auto uuid = event.self().getUuid();
-            exec::cancelJob(uuid);
-            saveSession(uuid);
-            sessions.erase(uuid);
+            exec::cancelRequestedJob(uuid);
+            if (!exec::hasJob(uuid)) closeSession(uuid);
         });
 }
 
