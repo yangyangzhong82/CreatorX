@@ -1,124 +1,131 @@
-# CreatorX 命令速查手册（单页汇总版）
+# CreatorX 命令速查手册
 
-CreatorX 是基于 LeviLamina（`26.60.*`）的 Minecraft 基岩版快速建造模组。本页汇集了当前版本的**全部 47 条命令语法、图案/掩码规则与快捷键速查表**，适合熟悉基础操作后随时检索。
-
-> **想看带新手实例的分章节图文详解？请阅读分章教程：**
-> 1. [快速上手与安装](01-快速上手与安装.md) · 2. [选区与可视化](02-选区与可视化.md) · 3. [图案、掩码与编辑生成](03-图案掩码与编辑生成.md) · 4. [剪贴板与原理图](04-剪贴板与原理图.md) · 5. [图形菜单与客户端增强](05-图形菜单与客户端增强.md) · 6. [历史记录、配置与服主指南](06-历史记录配置与服主指南.md) · 7. [开发者与编译指南](07-开发者与编译指南.md)
-
-> **通用规则**：
-> - **权限**：全部命令与魔杖/表单均需玩家在游戏内以 **OP（`GameDirectors`）** 身份执行（不支持后台控制台直接运行）。
-> - **短命令**：当 `config.jsonc` 中 `command.shortCommands` 为 `true`（默认开启）时，所有 `/cx <子命令>` 均可直接省略 `/cx` 输入（如 `/pos1`、`/set stone`、`/paste -ap`、`/undo`）。
+> - **权限**：所有命令与工具需在游戏内以 **OP（`GameDirectors`）** 身份执行，不支持服务器控制台直接运行。
+> - **短命令**：`command.shortCommands: true`（默认开启）时，第 1、3、5、6 节命令均可省略 `/cx`（如 `/pos1`、`/set stone`、`/undo`）；第 4 节**笔刷与工具命令**需带 `/cx` 前缀。
 
 ---
 
-## 1. 选区与统计命令（15 条）
+## 1. 选区与统计命令
 
-选区为闭区间三维长方体，与所在维度绑定。魔杖手势：**左键设点 1**、**右键设点 2**、**潜行（蹲下）+ 右键打开主菜单**。
+选区为闭区间三维长方体，按维度隔离。魔杖操作：**左键设点 1**、**右键设点 2**、**蹲下 + 右键打开主菜单**。
 
-| 命令 | 完整语法 | 功能说明 |
+| 命令 | 语法 | 说明 |
 | --- | --- | --- |
 | `wand` | `/cx wand` | 领取带专属标记的选区魔杖（默认木斧） |
-| `togglewand` | `/cx togglewand` | 临时停用或重新启用魔杖的设点与破坏拦截功能 |
-| `pos1` | `/cx pos1 [x y z]` | 设置点 1（省略坐标取脚下方块，支持 `~` 相对坐标与 `^` 局部坐标） |
-| `pos2` | `/cx pos2 [x y z]` | 设置点 2（省略坐标取脚下方块） |
-| `hpos1` | `/cx hpos1` | 将准星瞄准的方块设为点 1（默认最远 `128` 格） |
-| `hpos2` | `/cx hpos2` | 将准星瞄准的方块设为点 2 |
-| `size` | `/cx size` | 查看选区两点坐标、X/Y/Z 尺寸及总方块体积 |
-| `desel` | `/cx desel` | 清除当前选区与选区边框 |
-| `expand` | `/cx expand <格数> [反向格数] [方向]`<br>`/cx expand vert` | 向指定方向（默认面朝方向 `me`）扩大选区；`expand vert` 延伸至世界最低与最高高度 |
-| `contract` | `/cx contract <格数> [反向格数] [方向]` | 向指定方向缩进选区（至少保留 1 格） |
-| `shift` | `/cx shift <格数> [方向]` | 将选区框整体平移指定格数（**只移选区框，不移动方块**） |
-| `outset` | `/cx outset <格数> [-h \| -v]` | 向外等距外扩选区（默认六面同时；`-h` 仅水平四面，`-v` 仅上下两面） |
-| `inset` | `/cx inset <格数> [-h \| -v]` | 向内等距内缩选区（默认六面同时；`-h` 仅水平，`-v` 仅垂直） |
-| `count` | `/cx count <掩码>` | 统计选区内符合 `<掩码>` 条件的方块数量 |
-| `distr` | `/cx distr [-c]` | 按数量列出前 12 种方块及占比，并提示省略的种类数。`-c` 统计当前剪贴板。 |
+| `togglewand` | `/cx togglewand` | 停用或重新启用魔杖功能 |
+| `pos1` / `pos2` | `/cx pos1 [x y z]`<br>`/cx pos2 [x y z]` | 设点 1 / 点 2（省略坐标取脚下，支持 `~` 与 `^`） |
+| `hpos1` / `hpos2` | `/cx hpos1` / `/cx hpos2` | 将准星瞄准的方块设为点 1 / 点 2（默认最远 128 格） |
+| `size` | `/cx size` | 查看选区坐标、尺寸与体积 |
+| `desel` | `/cx desel` | 清除当前选区与边框 |
+| `expand` | `/cx expand <格数> [反向格数] [方向]`<br>`/cx expand vert` | 向指定方向扩大选区；`vert` 贯通世界最低到最高高度 |
+| `contract` | `/cx contract <格数> [反向格数] [方向]` | 向指定方向收缩选区（至少保留 1 格） |
+| `shift` | `/cx shift <格数> [方向]` | 整体平移选区框（不移动方块） |
+| `outset` / `inset` | `/cx outset <格数> [-h \| -v]`<br>`/cx inset <格数> [-h \| -v]` | 六面同时外扩或内缩；`-h` 仅水平，`-v` 仅垂直 |
+| `count` | `/cx count <掩码>` | 统计选区内符合掩码的方块数量 |
+| `distr` | `/cx distr [-c]` | 列出前 12 种方块数量；`-c` 统计当前剪贴板 |
 
-> **方向可选值**：`me`（当前视线朝向，含抬头/低头）、`up`（+Y）、`down`（-Y）、`north`（-Z）、`south`（+Z）、`east`（+X）、`west`（-X）。
+**方向参数**：`me`（默认，当前视线主方向）、`up`（+Y）、`down`（-Y）、`north`（-Z）、`south`（+Z）、`east`（+X）、`west`（-X）。
 
 ---
 
-## 2. 图案（Pattern）与掩码（Mask）语法速查
+## 2. 图案（Pattern）与掩码（Mask）
 
-### 图案（决定“放什么方块”）
-- **普通方块**：`stone`、`minecraft:oak_planks`（可省略 `minecraft:`）
-- **手持方块**：`hand`（主手）、`offhand`（副手），自动保留手上物品状态
-- **带状态方块**：`wool[color=red]`、`oak_stairs["upside_down_bit"=true,"weirdo_direction"=2]`
-- **百分比随机混合**：`60%stone,30%cobblestone,andesite`（逗号分隔；未写百分比项平分 `100%` 剩余比例，若已写项合计 `>= 100%` 则未写项按权重 `1` 参与）
+### 图案（放什么方块）
+- **方块名**：`stone`、`minecraft:oak_planks`（可省略 `minecraft:`）
+- **手持方块**：`hand`（主手）、`offhand`（副手）
+- **精确状态**：`wool[color=red]`、`oak_stairs["upside_down_bit"=true,"weirdo_direction"=2]`
+- **随机混合**：`60%stone,30%cobblestone,andesite`（未写百分比项平分 `100%` 剩余比例）
 
-### 掩码（决定“改哪些方块”）
-- **指定方块 / 并集（或）**：`dirt,grass_block`、`wool[color=red]`（写 `[...]` 精确匹配状态，不写匹配该方块全部变体）、`hand`、`offhand`
-- **内置集合**：`#existing`（所有非空气方块）、`#solid`（所有实心方块）、`#air`（空气方块）
-- **排除取反（非）**：前缀加 `!`，如 `!air`、`!water,lava`、`!#solid`
-- **多条件交集（且）**：用**空格**分隔多个条件，如 `#solid !bedrock`（实心且非基岩）、`!air !water`
+### 掩码（匹配哪些方块）
+- **方块 / 并集（或）**：`dirt,grass_block`、`wool[color=red]`（不写 `[...]` 匹配全部变体）、`hand`、`offhand`
+- **内置集合**：`#existing`（非空气）、`#solid`（实心方块）、`#air`（空气）
+- **取反（非）**：`!air`、`!water,lava`、`!#solid`
+- **交集（且）**：空格分隔多条件，如 `#solid !bedrock`、`!air !water`
 
 ---
 
-## 3. 区域编辑与几何生成命令（16 条）
+## 3. 区域编辑与几何生成命令
 
-### 基于选区的区域编辑（需先设好点 1 和点 2）
+### 区域编辑（需先设选区）
 
-| 命令 | 完整语法 | 功能说明 |
+| 命令 | 语法 | 说明 |
 | --- | --- | --- |
-| `set` | `/cx set <图案>` | 将整个选区填充为指定图案（单方块名支持 Tab 补全） |
-| `replace` | `/cx replace [原方块掩码] <新图案>` | 将符合掩码的方块替换为新图案；省略掩码时默认替换 `#existing`（所有非空气） |
-| `walls` | `/cx walls <图案>` | 生成选区的四周垂直围墙（不含顶面与底面） |
-| `faces` | `/cx faces <图案>` | 生成选区的全部六个外表面（内部不变） |
-| `outline` | `/cx outline <图案>` | `faces` 的同义别名 |
-| `hollow` | `/cx hollow [外壳厚度] [内部填充图案]` | 保留选区外表面（默认厚 `1` 格），将内部掏空填充为指定图案（默认 `air`） |
-| `overlay` | `/cx overlay <图案>` | 在选区每一列最高实心方块正上方铺设一层方块 |
-| `center` | `/cx center <图案>` | 在选区正中心点放置标记方块 |
-| `move` | `/cx move [格数] [方向] [-a] [-s]` | 将选区内建筑整体搬移 `[格数]`（默认 `1`，默认朝视线方向）并清空原位；`-a` 跳过空气，`-s` 选区框跟随移动 |
-| `stack` | `/cx stack [次数] [方向] [-a] [-s]` | 将选区内建筑沿指定方向连续紧挨着复制堆叠 `[次数]` 份（默认 `1`）；支持 `-a`、`-s` |
+| `set` | `/cx set <图案>` | 填充整个选区（单方块名支持命令补全） |
+| `replace` | `/cx replace [原方块掩码] <新图案>` | 替换匹配方块；省略掩码默认替换 `#existing` |
+| `walls` | `/cx walls <图案>` | 生成四周垂直围墙 |
+| `faces` / `outline` | `/cx faces <图案>` / `/cx outline <图案>` | 生成六个外表面（两者等价） |
+| `hollow` | `/cx hollow [厚度] [内部图案]` | 保留外壳（默认厚 1 格），内部填为指定图案（默认 `air`） |
+| `overlay` | `/cx overlay <图案>` | 在每列最高实心方块正上方铺设一层 |
+| `center` | `/cx center <图案>` | 在选区几何中心放置方块 |
+| `move` | `/cx move [格数] [方向] [-a] [-s] [-e] [-m <掩码>]` | 移动选区内建筑并清空原位 |
+| `stack` | `/cx stack [次数] [方向] [-a] [-s] [-e] [-m <掩码>]` | 沿指定方向连续复制堆叠 |
 
-### 无需选区的几何形状生成（以玩家脚下坐标为基准）
+> `move` / `stack` 参数：`-a` 跳过空气，`-s` 选区跟随，`-e` 含非玩家实体，`-m <掩码>` 仅处理匹配方块（须放最后）。
 
-| 命令 | 完整语法 | 功能说明 |
+### 几何形状生成（默认以脚下为基准，加 `-c` 改以选区中心为基准）
+
+| 命令 | 语法 | 说明 |
 | --- | --- | --- |
-| `sphere` | `/cx sphere <图案> <r>[,ry,rz] [-r]` | 生成实心球体（填 `rx,ry,rz` 生成椭球）；加 `-r` 将球心向上抬高使球底贴地 |
-| `hsphere` | `/cx hsphere <图案> <r>[,ry,rz] [-r]` | 生成单层表皮空心球 / 空心椭球 |
-| `cyl` | `/cx cyl <图案> <r>[,rz] [高度]` | 生成实心圆柱 / 椭圆柱（默认高度 `1` 格，即圆盘） |
-| `hcyl` | `/cx hcyl <图案> <r>[,rz] [高度]` | 生成空心圆柱筒（不含上下底盖） |
-| `pyramid` | `/cx pyramid <图案> <层数>` | 生成实心四棱锥金字塔 |
-| `hpyramid` | `/cx hpyramid <图案> <层数>` | 生成空心金字塔外壳 |
+| `sphere` / `hsphere` | `/cx sphere <图案> <r>[,ry,rz] [-r] [-c] [-m <掩码>]` | 实心/空心球或椭球；`-r` 将球底抬至基准点上方 |
+| `cyl` / `hcyl` | `/cx cyl <图案> <r>[,rz] [高度] [-c] [-m <掩码>]` | 实心/空心圆柱或椭圆柱（默认高度 1） |
+| `pyramid` / `hpyramid` | `/cx pyramid <图案> <层数> [-c] [-m <掩码>]` | 实心/空心四棱锥金字塔 |
 
 ---
 
-## 4. 剪贴板与原理图命令（7 条）
+## 4. 笔刷与手持工具命令（须带 `/cx` 前缀）
 
-剪贴板随玩家档案持久化保存，自动携带含水第二层与箱子/告示牌等方块实体 NBT（含大箱子配对修正）。
+将功能绑定到当前主手拿着的物品上，绑定后右键对准远处方块使用（`tool` 还支持左键）。
 
-| 命令 | 完整语法 | 功能说明 |
+| 命令 | 语法 | 说明 |
 | --- | --- | --- |
-| `copy` | `/cx copy [-e] [-m <掩码>]` | 复制选区并记录相对玩家脚下的偏移量（`-e` 含非玩家实体，`-m` 掩码放最后） |
-| `cut` | `/cx cut [留下的图案] [-e] [-m <掩码>]` | 复制选区后将原位置填充为指定图案（默认 `air`） |
-| `paste` | `/cx paste [-a] [-o] [-s] [-p] [-e] [-m <掩码>]` | `-a` 跳过空气，`-o` 原位，`-s` 选中粘贴区，`-p` 显示预览，`-e` 含实体，`-m` 掩码过滤（放最后）。 |
-| `pastepreview` / `confirm` | `/cx pastepreview <dx> <dy> <dz> [Y轴角度]` / `/cx confirm` | 调整预览位置和朝向，或确认落地。 |
-| `rotate` | `/cx rotate <Y角度> [X角度] [Z角度]` | 按 90° 倍数三维旋转剪贴板，自动同步旋转楼梯/门/原木/铁轨等方块状态与实体朝向 |
-| `flip` | `/cx flip [方向]` | 沿指定轴镜像翻转剪贴板，默认按玩家当前朝向。 |
-| `clearclipboard` | `/cx clearclipboard` | 清空当前剪贴板 |
-| `schem` | `/cx schem export <文件> [格式] [-e]`<br>`/cx schem place <文件> [格式] [-a] [-e]`<br>`/cx schem save <文件> [格式]`<br>`/cx schem load <文件> [格式]`<br>`/cx schem list [关键词]`<br>`/cx schem delete <文件> [格式]` | 导出选区、直接放置、保存或加载剪贴板。支持 `.mcstructure`、`.cxs`、`.schem` 和 `.litematic`，文件位于 `mods/creatorx/data/schematics/` |
+| `brush sphere` | `/cx brush sphere <图案> [半径] [-h]` | 球形笔刷（`-h` 空心） |
+| `brush cyl` | `/cx brush cyl <图案> [半径] [高度] [-h]` | 圆柱笔刷（`-h` 空心） |
+| `brush smooth` | `/cx brush smooth [半径] [次数]` | 地形平滑笔刷 |
+| `brush gravity` | `/cx brush gravity [半径]` | 重力下落笔刷（使悬空方块落到下方实心面） |
+| `brush clipboard` | `/cx brush clipboard [-a] [-o]` | 剪贴板笔刷（`-a` 跳过空气，`-o` 原位） |
+| `tool info` | `/cx tool info` | 信息工具：左/右键查看方块 ID、状态与方块实体 NBT |
+| `tool repl` | `/cx tool repl <图案>` | 单格替换工具：左键吸取目标方块，右键替换为指定图案 |
+| `size` | `/cx size <1-64>` | 调整当前球形/圆柱/平滑/重力笔刷半径 |
+| `mat` | `/cx mat <图案>` | 修改当前笔刷或替换工具的材质 |
+| `mask` | `/cx mask [掩码]` | 设置笔刷过滤掩码（省略掩码即清除） |
+| `range` | `/cx range <1-128>` | 设置当前笔刷或工具的射线距离 |
+| `none` | `/cx none` | 解绑当前手持物品的笔刷或工具 |
 
 ---
 
-## 5. 历史记录、菜单与系统命令（9 条）
+## 5. 剪贴板与原理图命令
 
-| 命令 | 完整语法 | 功能说明 |
+| 命令 | 语法 | 说明 |
 | --- | --- | --- |
-| `undo` | `/cx undo [步数] [玩家名或UUID]` | 撤销最近 `[步数]` 次操作（默认 `1`）；管理员可指定玩家名或离线 UUID 回滚他人操作 |
-| `redo` | `/cx redo [步数] [玩家名或UUID]` | 重做最近被撤销的 `[步数]` 次操作（默认 `1`），支持指定他人 |
-| `history` | `/cx history` | 查看当前可撤销与可重做记录列表（含操作类型、改动数、时间戳） |
-| `clearhistory` | `/cx clearhistory` | 清空自己的撤销与重做历史栈 |
-| `cancel` | `/cx cancel` | 中止正在执行的任务（已修改部分仍会存入历史，可用 `/cx undo` 恢复） |
-| `menu` | `/cx menu` | 打开 CreatorX 图形化主菜单（等同于潜行右键魔杖或按 `F10`） |
-| `reload` | `/cx reload` | 热重载 `config.jsonc`、语言包、黑名单与可视化配置 |
-| `help` | `/cx help [命令名]` | 查看命令总表或查询某条具体命令的语法（如 `/cx help paste`） |
-| `cx` | `/cx <子命令> ...` | CreatorX 根命令入口 |
+| `copy` | `/cx copy [-e] [-m <掩码>]` | 复制选区并记录相对脚下的偏移 |
+| `cut` | `/cx cut [留下的图案] [-e] [-m <掩码>]` | 复制选区后将原位填为指定图案（默认 `air`） |
+| `paste` | `/cx paste [-a] [-o] [-s] [-p] [-e] [-m <掩码>]` | `-a` 跳空气，`-o` 原位，`-s` 选中，`-p` 预览，`-e` 含实体，`-m` 掩码（放最后） |
+| `pastepreview` | `/cx pastepreview <dx> <dy> <dz> [Y轴角度]` | 预览期间平移和旋转落点 |
+| `confirm` | `/cx confirm` | 确认当前粘贴预览并落地 |
+| `rotate` | `/cx rotate <Y角度> [X角度] [Z角度]` | 按 90° 倍数三维旋转剪贴板（同步旋转方块朝向与实体） |
+| `flip` | `/cx flip [方向]` | 沿指定轴镜像翻转（省略默认当前朝向） |
+| `clearclipboard` | `/cx clearclipboard` | 清空剪贴板 |
+| `schem` | `/cx schem export <文件> [格式] [-e]`<br>`/cx schem place <文件> [格式] [-a] [-e]`<br>`/cx schem save/load/delete <文件> [格式]`<br>`/cx schem list [关键词]` | 原理图导出、放置、保存、加载、删除与列表。支持 `.mcstructure`、`.cxs`、`.schem`、`.litematic`，文件位于 `mods/creatorx/data/schematics/` |
 
 ---
 
-## 6. 客户端快捷键速查（Windows 客户端）
+## 6. 历史、菜单与系统命令
 
-可在游戏「设置 → 键盘和鼠标」中自定义键位：
+| 命令 | 语法 | 说明 |
+| --- | --- | --- |
+| `undo` / `redo` | `/cx undo [步数] [玩家名或UUID]`<br>`/cx redo [步数] [玩家名或UUID]` | 撤销或重做（默认 1 步；管理员可指定他人回滚） |
+| `history` | `/cx history` | 查看可撤销与可重做历史列表 |
+| `clearhistory` | `/cx clearhistory` | 清空自己的撤销与重做记录 |
+| `cancel` | `/cx cancel` | 中止当前运行任务，或取消粘贴预览 |
+| `menu` | `/cx menu` | 打开 CreatorX 图形主菜单 |
+| `reload` | `/cx reload` | 热重载 `config.jsonc`、语言包与黑名单 |
+| `help` | `/cx help [命令名]` | 查看命令列表或指定命令语法 |
+
+---
+
+## 7. 客户端快捷键（Windows 客户端）
+
+可在游戏「设置 → 键盘和鼠标」中修改键位：
 
 | 默认按键 | 对应命令 | 作用 |
 | :---: | --- | --- |
