@@ -8,6 +8,7 @@
 #include "command/SelectionCommands.h"
 #include "edit/Pattern.h"
 #include "exec/JobScheduler.h"
+#include "input/BrushTools.h"
 #include "mod/Global.h"
 #include "net/Enhancements.h"
 #include "session/PlayerSession.h"
@@ -52,6 +53,7 @@ constexpr auto history   = "textures/items/book_writable";
 constexpr auto cancel    = "textures/blocks/barrier";
 constexpr auto settings  = "textures/items/redstone_dust";
 constexpr auto help      = "textures/items/book_normal";
+constexpr auto brush     = "textures/items/blaze_rod";
 constexpr auto feet      = "textures/items/leather_boots";
 constexpr auto look      = "textures/items/compass_item";
 constexpr auto back      = "textures/items/arrow";
@@ -199,6 +201,7 @@ void openReplaceForm(Player& player, std::string mask = {}, std::string pattern 
 void openClipboardMenu(Player& player, std::string const& notice = {}, bool error = false);
 void openHistoryMenu(Player& player, std::string const& notice = {}, bool error = false);
 void openSettingsMenu(Player& player);
+void openBrushMenu(Player& player);
 void openHelp(Player& player);
 void openMain(Player& player, std::string const& notice = {}, bool error = false);
 
@@ -428,6 +431,8 @@ void openBuildOperation(
              text("menu.dir_south"), text("menu.dir_east"), text("menu.dir_west")}, index(saved, "direction"));
         form.appendToggle("air", text("menu.paste_skip_air"), saved.empty() || number(saved, "air") != 0);
         form.appendToggle("select", text("menu.build_follow"), saved.empty() || number(saved, "select") != 0);
+        form.appendToggle("entities", text("menu.copy_entities"), number(saved, "entities") != 0);
+        form.appendInput("mask", text("menu.build_mask"), "#existing", inputText(saved, "mask"));
     }
     if (distribution) form.appendToggle("clipboard", text("menu.build_distr_clipboard"), number(saved, "clipboard") != 0);
     form.setSubmitButton(text("menu.apply"));
@@ -458,6 +463,9 @@ void openBuildOperation(
             args = amount + " " + directions[std::min(index(*result, "direction"), directions.size() - 1)];
             if (number(*result, "air")) args += " -a";
             if (number(*result, "select")) args += " -s";
+            if (number(*result, "entities")) args += " -e";
+            auto mask = inputText(*result, "mask");
+            if (!trim(mask).empty()) args += " -m " + mask;
         }
         if (distribution && number(*result, "clipboard")) args = "-c";
         std::string message;
@@ -523,6 +531,71 @@ void openReplaceForm(Player& player, std::string mask, std::string pattern, std:
         if (!regionEdit(target, Feedback(target, &message), core::BoxShape::all, pattern, std::string_view(mask))) {
             openReplaceForm(target, mask, pattern, message);
         }
+    });
+}
+
+void openBrushMenu(Player& player) {
+    static constexpr std::array<std::string_view, 8> actions{
+        "sphere", "cyl", "smooth", "clipboard", "gravity", "info", "repl", "none"
+    };
+    auto& session = getSession(player);
+    auto const& item = player.getSelectedItem();
+    BrushBinding const* current = nullptr;
+    if (!item.isNull()) {
+        auto it = session.brushBindings.find(item.getTypeName());
+        if (it != session.brushBindings.end()) current = &it->second;
+    }
+    CustomForm form(text("menu.brush_title"));
+    form.appendLabel(item.isNull() ? text("menu.brush_no_item") : tr("menu.brush_item", item.getTypeName()));
+    std::vector<std::string> labels;
+    for (auto action : actions) labels.push_back(text("menu.brush_" + std::string(action)));
+    size_t selected = current ? static_cast<size_t>(current->tool) : 0;
+    if (!current && item.isNull()) selected = 7;
+    form.appendDropdown("type", text("menu.brush_type"), labels, std::min(selected, actions.size() - 1));
+    form.appendInput("pattern", text("menu.brush_pattern"), "stone", current ? current->patternText : "");
+    form.appendInput("radius", text("menu.brush_radius"), "3", current ? std::to_string(current->radius) : "3");
+    form.appendInput("height", text("menu.brush_height"), "1", current ? std::to_string(current->height) : "1");
+    form.appendInput("iterations", text("menu.brush_iterations"), "1", current ? std::to_string(current->iterations) : "1");
+    form.appendInput("range", text("menu.brush_range"), "32", current ? std::to_string(current->range) : "32");
+    form.appendInput("mask", text("menu.brush_mask"), "#existing", current ? current->maskText : "");
+    form.appendToggle("hollow", text("menu.brush_hollow"), current && current->hollow);
+    form.appendToggle("skip_air", text("menu.paste_skip_air"), current && current->skipAir);
+    form.appendToggle("original", text("menu.paste_original"), current && current->original);
+    form.setSubmitButton(text("menu.apply"));
+    form.sendTo(player, [](Player& target, CustomFormResult const& result, FormCancelReason) {
+        if (!result) return openMain(target);
+        auto action = actions[std::min(index(*result, "type"), actions.size() - 1)];
+        if (action == "none") {
+            executeBrushOption(target, Feedback(target), "none", {});
+            return openBrushMenu(target);
+        }
+        auto pattern = inputText(*result, "pattern");
+        auto radius = inputText(*result, "radius");
+        auto height = inputText(*result, "height");
+        auto iterations = inputText(*result, "iterations");
+        std::string arguments;
+        if (action == "sphere" || action == "cyl") {
+            if (pattern.empty()) return openBrushMenu(target);
+            arguments = pattern + " " + radius;
+            if (action == "cyl") arguments += " " + height;
+            if (number(*result, "hollow")) arguments += " -h";
+        } else if (action == "smooth") {
+            arguments = radius + " " + iterations;
+        } else if (action == "gravity") {
+            arguments = radius;
+        } else if (action == "clipboard") {
+            if (number(*result, "skip_air")) arguments += " -a";
+            if (number(*result, "original")) arguments += " -o";
+        } else if (action == "repl") {
+            arguments = pattern;
+        }
+        if (action == "info" || action == "repl") executeTool(target, Feedback(target), action, arguments);
+        else executeBrush(target, Feedback(target), action, arguments);
+        auto range = inputText(*result, "range");
+        if (range != "32" && !range.empty()) executeBrushOption(target, Feedback(target), "range", range);
+        auto mask = inputText(*result, "mask");
+        if (!mask.empty() && action != "info" && action != "repl") executeBrushOption(target, Feedback(target), "mask", mask);
+        openBrushMenu(target);
     });
 }
 
@@ -744,6 +817,7 @@ void openMain(Player& player, std::string const& notice, bool error) {
     addButton(form,"menu.build",icon::fill,[](Player& p) {openBuildMenu(p);});
     addButton(form, "menu.replace", icon::replace, [](Player& p) { openReplaceForm(p); });
     addButton(form, "menu.clipboard", icon::clipboard, [](Player& p) { openClipboardMenu(p); });
+    addButton(form, "menu.brushes", icon::brush, [](Player& p) { openBrushMenu(p); });
     if (session.history.undoCount()) {
         addButton(form, "menu.undo_last", icon::undo, [](Player& p) {
             std::string message;

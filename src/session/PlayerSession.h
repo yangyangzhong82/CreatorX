@@ -47,6 +47,7 @@ struct PlayerSession {
     std::deque<std::string>                recentPatterns; // 最近使用的图案，最新的在前
     std::deque<std::string>                recentMasks;
     std::unordered_map<std::string, BrushBinding> brushBindings;
+    bool                                          brushBindingsRestored = false;
     std::chrono::steady_clock::time_point         lastBrushLeft{};
     std::chrono::steady_clock::time_point         lastBrushRight{};
     std::string                                   syncedBrushItem;

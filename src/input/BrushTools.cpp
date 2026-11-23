@@ -27,6 +27,7 @@
 #include "mc/world/phys/HitResult.h"
 
 #include <array>
+#include <algorithm>
 #include <charconv>
 
 namespace creatorx {
@@ -97,6 +98,11 @@ bool readPattern(Player& player, Feedback const& output, BrushBinding& binding, 
         return false;
     }
     binding.pattern = std::move(pattern);
+    binding.patternText = std::string(text);
+    if (text == "hand" || text == "offhand") {
+        auto const& source = text == "hand" ? player.getSelectedItem() : player.getOffhandSlot();
+        if (!source.isNull() && source.mBlock) binding.patternText = source.mBlock->getTypeName();
+    }
     return true;
 }
 
@@ -111,6 +117,7 @@ void bind(Player& player, Feedback const& output, BrushBinding binding, std::str
     bool  handlesLeft = isTool(binding);
     session.brushBindings.insert_or_assign(type, std::move(binding));
     if (syncBrushBinding(player, type, handlesLeft)) session.syncedBrushItem = type;
+    saveSession(player.getUuid());
     output.success(tr("brush.bound", name, type));
 }
 
@@ -215,6 +222,7 @@ void updateBinding(Player& player, Feedback const& output, BindingOption option,
     case BindingOption::none:
         session.brushBindings.erase(it);
         if (syncBrushBinding(player, {}, false)) session.syncedBrushItem.clear();
+        saveSession(player.getUuid());
         output.success(tr("brush.unbound"));
         return;
     case BindingOption::size:
@@ -245,6 +253,7 @@ void updateBinding(Player& player, Feedback const& output, BindingOption option,
         }
         if (tokens.empty()) {
             binding.mask.reset();
+            binding.maskText.clear();
         } else {
             std::string error;
             auto        mask = edit::Mask::parse(raw, player, error);
@@ -253,17 +262,18 @@ void updateBinding(Player& player, Feedback const& output, BindingOption option,
                 return;
             }
             binding.mask = std::move(mask);
+            binding.maskText = std::string(raw);
         }
         break;
     }
+    saveSession(player.getUuid());
     output.success(tr("brush.updated"));
 }
 
-void registerCommands() {
-    auto& root = ll::command::CommandRegistrar::getServerInstance()
-                     .getOrCreateCommand("cx", std::string(tr("command.cx")), CommandPermissionLevel::GameDirectors);
-    root.overload<BrushParams>()
-        .text("brush")
+void registerBrushAction(ll::command::CommandHandle& root, bool subcommand) {
+    auto brush = root.overload<BrushParams>();
+    if (subcommand) (void)brush.text("brush");
+    brush
         .required("action")
         .optional("arguments")
         .execute([](CommandOrigin const& origin, CommandOutput& output, BrushParams const& params) {
@@ -271,8 +281,12 @@ void registerCommands() {
                 bindBrush(*player, output, params.action, rawText(params.arguments));
             }
         });
-    root.overload<ToolParams>()
-        .text("tool")
+}
+
+void registerToolAction(ll::command::CommandHandle& root, bool subcommand) {
+    auto tool = root.overload<ToolParams>();
+    if (subcommand) (void)tool.text("tool");
+    tool
         .required("action")
         .optional("arguments")
         .execute([](CommandOrigin const& origin, CommandOutput& output, ToolParams const& params) {
@@ -280,9 +294,17 @@ void registerCommands() {
                 bindTool(*player, output, params.action, rawText(params.arguments));
             }
         });
-    root.overload().text("none").execute([](CommandOrigin const& origin, CommandOutput& output) {
+}
+
+void registerNoneAction(ll::command::CommandHandle& root, bool subcommand) {
+    auto none = root.overload();
+    if (subcommand) (void)none.text("none");
+    none.execute([](CommandOrigin const& origin, CommandOutput& output) {
         if (auto* player = getCommandPlayer(origin, output)) updateBinding(*player, output, BindingOption::none, {});
     });
+}
+
+void registerBindingOptions(ll::command::CommandHandle& root, bool subcommand) {
     for (auto [name, option] : std::array{
              std::pair{"size",  BindingOption::size },
              std::pair{"mat",   BindingOption::mat  },
@@ -290,7 +312,7 @@ void registerCommands() {
              std::pair{"range", BindingOption::range}
     }) {
         auto overload = root.overload<TextParams>();
-        (void)overload.text(name);
+        if (subcommand) (void)overload.text(name);
         if (option == BindingOption::mask) (void)overload.optional("arguments");
         else (void)overload.required("arguments");
         overload.execute([option](CommandOrigin const& origin, CommandOutput& output, TextParams const& params) {
@@ -299,6 +321,42 @@ void registerCommands() {
             }
         });
     }
+}
+
+void registerBrushCommands(ll::command::CommandHandle& root, bool subcommand) {
+    registerBrushAction(root, subcommand);
+    registerToolAction(root, subcommand);
+    registerNoneAction(root, subcommand);
+    registerBindingOptions(root, subcommand);
+}
+
+void registerCommands(CommandRegistry& registry) {
+    auto& registrar = ll::command::CommandRegistrar::getServerInstance();
+    auto& cx = registrar.getOrCreateCommand("cx", std::string(tr("command.cx")), CommandPermissionLevel::GameDirectors);
+    registerBrushCommands(cx, true);
+    if (!config.command.shortCommands) return;
+
+    auto registerShort = [&](std::string_view name, auto&& callback) {
+        if (registry.findCommand(std::string(name))) return;
+        auto& command = registrar.getOrCreateCommand(std::string(name), std::string(tr("command.cx")), CommandPermissionLevel::GameDirectors);
+        callback(command);
+    };
+    registerShort("brush", [](auto& command) { registerBrushAction(command, false); });
+    registerShort("tool", [](auto& command) { registerToolAction(command, false); });
+    for (auto [name, option] : std::array{
+             std::pair{"mat", BindingOption::mat}, std::pair{"mask", BindingOption::mask},
+             std::pair{"range", BindingOption::range}
+         }) {
+        registerShort(name, [option](auto& command) {
+            auto overload = command.template overload<TextParams>();
+            if (option == BindingOption::mask) (void)overload.optional("arguments");
+            else (void)overload.required("arguments");
+            overload.execute([option](CommandOrigin const& origin, CommandOutput& output, TextParams const& params) {
+                if (auto* player = getCommandPlayer(origin, output)) updateBinding(*player, output, option, rawText(params.arguments));
+            });
+        });
+    }
+    registerShort("none", [](auto& command) { registerNoneAction(command, false); });
 }
 
 bool insideShape(BrushBinding const& binding, core::Vec3i offset) {
@@ -405,18 +463,18 @@ void inspectBlock(Feedback const& output, BlockSource const& region, BlockPos co
 }
 
 bool updatePreview(Player& player) {
-    auto* session = findSession(player.getUuid());
-    if (!session || (session->brushBindings.empty() && session->syncedBrushItem.empty())) return true;
+    auto& session = getSession(player);
+    if (session.brushBindings.empty() && session.syncedBrushItem.empty()) return true;
     auto const& item = player.getSelectedItem();
     auto        type = item.isNull() ? std::string{} : item.getTypeName();
-    auto        it   = session->brushBindings.find(type);
-    if (!canUseBindings(player) || it == session->brushBindings.end()) {
-        if (!session->syncedBrushItem.empty() && syncBrushBinding(player, {}, false)) session->syncedBrushItem.clear();
+    auto        it   = session.brushBindings.find(type);
+    if (!canUseBindings(player) || it == session.brushBindings.end()) {
+        if (!session.syncedBrushItem.empty() && syncBrushBinding(player, {}, false)) session.syncedBrushItem.clear();
         return true;
     }
     auto const& binding = it->second;
-    if (session->syncedBrushItem != type && syncBrushBinding(player, type, isTool(binding))) {
-        session->syncedBrushItem = std::move(type);
+    if (session.syncedBrushItem != type && syncBrushBinding(player, type, isTool(binding))) {
+        session.syncedBrushItem = std::move(type);
     }
     if (isTool(binding) || config.visual.mode == "none" || config.visual.mode == "particles"
         || config.visual.maxDistance <= 0 || !hasEnhancedClient(player))
@@ -427,18 +485,42 @@ bool updatePreview(Player& player) {
 
 } // namespace
 
+void executeBrush(Player& player, Feedback const& output, std::string_view action, std::string_view arguments) {
+    static constexpr std::array actions{"sphere", "cyl", "smooth", "clipboard", "gravity"};
+    auto it = std::ranges::find(actions, action);
+    if (it == actions.end()) {
+        output.error(tr("help.brush"));
+        return;
+    }
+    bindBrush(player, output, static_cast<BrushAction>(it - actions.begin()), arguments);
+}
+
+void executeTool(Player& player, Feedback const& output, std::string_view action, std::string_view arguments) {
+    if (action == "info") bindTool(player, output, ToolAction::info, arguments);
+    else if (action == "repl") bindTool(player, output, ToolAction::repl, arguments);
+    else output.error(tr("help.tool"));
+}
+
+void executeBrushOption(Player& player, Feedback const& output, std::string_view option, std::string_view arguments) {
+    if (option == "size") updateBinding(player, output, BindingOption::size, arguments);
+    else if (option == "mat") updateBinding(player, output, BindingOption::mat, arguments);
+    else if (option == "mask") updateBinding(player, output, BindingOption::mask, arguments);
+    else if (option == "range") updateBinding(player, output, BindingOption::range, arguments);
+    else if (option == "none") updateBinding(player, output, BindingOption::none, arguments);
+}
+
 bool handleBrushClick(Player& player, ItemStack const& item, bool left) {
     if (!canUseBindings(player) || item.isNull()) return false;
-    auto* session = findSession(player.getUuid());
-    if (!session || session->brushBindings.empty()) return false;
+    auto& session = getSession(player);
+    if (session.brushBindings.empty()) return false;
     auto type = item.getTypeName();
-    auto it   = session->brushBindings.find(type);
-    if (it == session->brushBindings.end() || (left && !isTool(it->second))) return false;
+    auto it   = session.brushBindings.find(type);
+    if (it == session.brushBindings.end() || (left && !isTool(it->second))) return false;
     auto const& selected = player.getSelectedItem();
     if (&selected != &item && (selected.isNull() || selected.getTypeName() != type)) return false;
 
     auto  now  = Clock::now();
-    auto& last = left ? session->lastBrushLeft : session->lastBrushRight;
+    auto& last = left ? session.lastBrushLeft : session.lastBrushRight;
     if (now - last < clickInterval) return true;
     last = now;
 
@@ -457,6 +539,8 @@ bool handleBrushClick(Player& player, ItemStack const& item, bool left) {
         else if (edit::isDisallowed(block)) output.error(tr("pattern.disallowed", block.getTypeName()));
         else {
             binding.pattern = edit::Pattern::single(block);
+            binding.patternText = block.getTypeName();
+            saveSession(player.getUuid());
             output.success(tr("brush.sampled", block.getTypeName()));
         }
     } else {
@@ -468,10 +552,10 @@ bool handleBrushClick(Player& player, ItemStack const& item, bool left) {
 void enableBrushTools() {
     auto& bus       = ll::event::EventBus::getInstance();
     commandListener = bus.emplaceListener<ll::event::ServerCommandRegisterEvent>(
-        [](auto&) { registerCommands(); },
+        [](auto& event) { registerCommands(event.commandRegistry()); },
         ll::event::EventPriority::Low
     );
-    if (ll::service::getCommandRegistry(false)) registerCommands();
+    if (auto registry = ll::service::getCommandRegistry(false)) registerCommands(*registry);
     previewListener = bus.emplaceListener<ll::event::ServerLevelTickEvent>([ticks = 0](auto& event) mutable {
         if (++ticks < 3) return;
         ticks = 0;

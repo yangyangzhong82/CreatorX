@@ -57,6 +57,7 @@ void openTransformMenu(Player& player) {
 }
 namespace {
 void openSchematicBrowser(Player& player, std::string filter = {}, size_t page = 0);
+void openSchematicFile(Player& player, std::string name, std::string filter, size_t page);
 
 void openSchematicSearch(Player& player, std::string filter) {
     ll::form::CustomForm form(text("menu.schem_search"));
@@ -65,6 +66,27 @@ void openSchematicSearch(Player& player, std::string filter) {
         Player& target, ll::form::CustomFormResult const& result, ll::form::FormCancelReason
     ) {
         openSchematicBrowser(target, result ? input(*result, "filter") : filter);
+    });
+}
+
+void openSchematicPlace(Player& player, std::string name, std::string filter, size_t page, std::string error = {}) {
+    ll::form::CustomForm form(text("menu.schem_place"));
+    if (!error.empty()) form.appendLabel("§c" + error + "§r");
+    form.appendToggle("skip_air", text("menu.paste_skip_air"), true);
+    form.appendToggle("entities", text("menu.copy_entities"), false);
+    form.setSubmitButton(text("menu.apply"));
+    form.sendTo(player, [name = std::move(name), filter = std::move(filter), page](
+        Player& target, ll::form::CustomFormResult const& result, ll::form::FormCancelReason
+    ) {
+        if (!result) return openSchematicFile(target, name, filter, page);
+        std::string message;
+        if (!executeSchematic(
+                target, Feedback(target, &message), "place", name, "mcstructure",
+                number(*result, "skip_air") != 0, number(*result, "entities") != 0
+            )) {
+            return openSchematicPlace(target, name, filter, page, message);
+        }
+        openSchematicBrowser(target, filter, page);
     });
 }
 
@@ -77,10 +99,11 @@ void openSchematicFile(Player& player, std::string name, std::string filter, siz
     form.sendTo(player, [name = std::move(name), filter = std::move(filter), page](
         Player& target, int selected, ll::form::FormCancelReason
     ) {
-        if (selected == 0 || selected == 1) {
-            if (executeSchematic(target, Feedback(target), selected == 0 ? "load" : "place", name)) return;
+        if (selected == 0) {
+            if (executeSchematic(target, Feedback(target), "load", name)) return;
             return openSchematicFile(target, name, filter, page);
         }
+        if (selected == 1) return openSchematicPlace(target, name, filter, page);
         if (selected != 2) return openSchematicBrowser(target, filter, page);
         ll::form::ModalForm confirm(
             text("menu.schem_delete"), tr("menu.schem_delete_confirm", name),
@@ -141,19 +164,25 @@ void openSchematicBrowser(Player& player, std::string filter, size_t page) {
     });
 }
 
-void openSchematicSave(Player& player, bool selection, std::string name, size_t format, std::string const& error = {}) {
+void openSchematicSave(
+    Player& player, bool selection, std::string name, size_t format, bool entities = false, std::string const& error = {}
+) {
     static const std::vector<std::string> formats{"cxs", "mcstructure", "schem", "litematic"};
     ll::form::CustomForm form(text(selection ? "menu.schem_export" : "menu.schem_save"));
     if (!error.empty()) form.appendLabel("§c" + error + "§r");
     form.appendInput("name", text("menu.schem_name"), "house", name);
     form.appendDropdown("format", text("menu.schem_format"), formats, format);
+    if (selection) form.appendToggle("entities", text("menu.copy_entities"), entities);
     form.sendTo(player, [selection](Player& target, ll::form::CustomFormResult const& result, ll::form::FormCancelReason) {
         if (!result) return openSchematicMenu(target);
         auto name = input(*result, "name");
         auto format = std::min(number(*result, "format"), formats.size() - 1);
         std::string message;
-        if (!executeSchematic(target, Feedback(target, &message), selection ? "export" : "save", name, formats[format])) {
-            openSchematicSave(target, selection, std::move(name), format, message);
+        bool entities = selection && number(*result, "entities") != 0;
+        if (!executeSchematic(
+                target, Feedback(target, &message), selection ? "export" : "save", name, formats[format], false, entities
+            )) {
+            openSchematicSave(target, selection, std::move(name), format, entities, message);
         }
     });
 }

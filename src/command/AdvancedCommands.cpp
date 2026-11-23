@@ -542,9 +542,12 @@ void registerCommands(CommandRegistry& registry) {
     }
 }
 } // namespace
-bool executeSchematic(Player& player, Feedback const& output, std::string_view action, std::string name, std::string format) {
+bool executeSchematic(
+    Player& player, Feedback const& output, std::string_view action, std::string name, std::string format,
+    bool skipAir, bool entities
+) {
     try {
-        return runSchematic(player, output, action, std::move(name), std::move(format));
+        return runSchematic(player, output, action, std::move(name), std::move(format), skipAir, entities);
     } catch (std::exception const& error) {
         output.error(tr("advanced.failed", error.what()));
         return false;

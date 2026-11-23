@@ -167,12 +167,16 @@ std::vector<std::string> listFiles(std::string_view search) {
     auto directory = storage::dataDir() / "schematics";
     std::filesystem::create_directories(directory);
     std::vector<std::string> names;
+    std::string needle(search);
+    std::ranges::transform(needle, needle.begin(), [](unsigned char c) { return char(std::tolower(c)); });
     for (auto const& item : std::filesystem::directory_iterator(directory)) {
         if (!item.is_regular_file()) continue;
         if (!fromExtension(item.path().extension().u8string())) continue;
         auto raw = item.path().filename().u8string();
         std::string name(raw.begin(), raw.end());
-        if (name.find(search) != std::string::npos) names.push_back(std::move(name));
+        auto folded = name;
+        std::ranges::transform(folded, folded.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        if (folded.find(needle) != std::string::npos) names.push_back(std::move(name));
     }
     std::ranges::sort(names);
     return names;

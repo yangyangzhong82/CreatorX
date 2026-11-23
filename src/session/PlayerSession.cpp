@@ -35,7 +35,33 @@ void rememberRecent(std::deque<std::string>& list, std::string_view text) {
 }
 
 PlayerSession& getSession(Player const& player) {
-    return getSession(player.getUuid());
+    auto& session = getSession(player.getUuid());
+    if (!session.brushBindingsRestored) {
+        session.brushBindingsRestored = true;
+        for (auto it = session.brushBindings.begin(); it != session.brushBindings.end();) {
+            auto& binding = it->second;
+            bool valid = true;
+            if (!binding.patternText.empty()) {
+                std::string error;
+                binding.pattern = edit::Pattern::parse(binding.patternText, player, error);
+                if (!binding.pattern) {
+                    logger.warn(tr("storage.failed", error));
+                    valid = false;
+                }
+            }
+            if (valid && !binding.maskText.empty()) {
+                std::string error;
+                binding.mask = edit::Mask::parse(binding.maskText, player, error);
+                if (!binding.mask) {
+                    logger.warn(tr("storage.failed", error));
+                    binding.maskText.clear();
+                }
+            }
+            if (valid) ++it;
+            else it = session.brushBindings.erase(it);
+        }
+    }
+    return session;
 }
 
 PlayerSession& getSession(mce::UUID const& uuid) {
@@ -63,6 +89,25 @@ PlayerSession& getSession(mce::UUID const& uuid) {
                 }
                 for (auto const& value : tag["patterns"].get<ListTag>()) it->second.recentPatterns.emplace_back(std::string_view(value));
                 for (auto const& value : tag["masks"].get<ListTag>()) it->second.recentMasks.emplace_back(std::string_view(value));
+                if (tag.contains("brush_bindings")) {
+                    for (auto const& value : tag["brush_bindings"].get<ListTag>()) {
+                        auto const& entry = value.get<CompoundTag>();
+                        auto tool = int(entry["tool"]);
+                        if (tool < 0 || tool > int(BrushTool::repl) || !entry.contains("item")) continue;
+                        BrushBinding binding;
+                        binding.tool = static_cast<BrushTool>(tool);
+                        if (entry.contains("pattern")) binding.patternText = std::string(std::string_view(entry["pattern"]));
+                        if (entry.contains("mask")) binding.maskText = std::string(std::string_view(entry["mask"]));
+                        if (entry.contains("radius")) binding.radius = int(entry["radius"]);
+                        if (entry.contains("height")) binding.height = int(entry["height"]);
+                        if (entry.contains("iterations")) binding.iterations = int(entry["iterations"]);
+                        if (entry.contains("range")) binding.range = int(entry["range"]);
+                        if (entry.contains("hollow")) binding.hollow = bool(entry["hollow"]);
+                        if (entry.contains("skip_air")) binding.skipAir = bool(entry["skip_air"]);
+                        if (entry.contains("original")) binding.original = bool(entry["original"]);
+                        it->second.brushBindings.emplace(std::string(std::string_view(entry["item"])), std::move(binding));
+                    }
+                }
             } catch (std::exception const& e) {
                 logger.error(tr("storage.failed", e.what()));
             }
@@ -107,6 +152,23 @@ void saveSession(mce::UUID const& uuid) {
         for (auto const& value : session->recentMasks) masks.push_back(value);
         tag["patterns"] = std::move(patterns);
         tag["masks"] = std::move(masks);
+        auto bindings = storage::Nbt::array();
+        for (auto const& [item, binding] : session->brushBindings) {
+            bindings.push_back(storage::Nbt::object({
+                {"item", item},
+                {"tool", int(binding.tool)},
+                {"pattern", binding.patternText},
+                {"mask", binding.maskText},
+                {"radius", binding.radius},
+                {"height", binding.height},
+                {"iterations", binding.iterations},
+                {"range", binding.range},
+                {"hollow", binding.hollow},
+                {"skip_air", binding.skipAir},
+                {"original", binding.original}
+            }));
+        }
+        tag["brush_bindings"] = std::move(bindings);
         storage::queueNbt(storage::dataDir() / "players" / session->world / (uuid.asString() + ".nbt"), std::move(tag),session->history.pendingWrites());
     } catch (std::exception const& e) {
         logger.error(tr("storage.failed", e.what()));
