@@ -24,7 +24,7 @@
           "placements": [
             {
               "type": "dir",
-              "src": "creatorx/",
+              "src": "server/creatorx/",
               "dest": "mods/creatorx/"
             }
           ]
@@ -58,7 +58,7 @@
           "placements": [
             {
               "type": "dir",
-              "src": "creatorx/",
+              "src": "client/creatorx/",
               "dest": "mods/creatorx/"
             }
           ]

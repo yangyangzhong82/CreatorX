@@ -1,5 +1,5 @@
 {
-    "name": "${modName}",
+    "name": "creatorx",
     "entry": "${modFile}",
     "version": "${modVersion}",
     "type": "native",

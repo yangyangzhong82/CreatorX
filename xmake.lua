@@ -27,7 +27,11 @@ option_end()
 
 target("creatorx")
     add_rules("@levibuildscript/linkrule")
-    add_rules("@levibuildscript/modpacker")
+    if is_config("target_type", "server") then
+        add_rules("@levibuildscript/modpacker", {modName = "server/creatorx"})
+    else
+        add_rules("@levibuildscript/modpacker", {modName = "client/creatorx"})
+    end
     if is_plat("windows") then
         add_defines("NOMINMAX", "UNICODE", "_HAS_CXX23=1")
         set_exceptions("none") -- To avoid conflicts with /EHa.
@@ -66,7 +70,8 @@ target("creatorx")
     --  add_files("src-client/**.cpp")
     end
     after_build(function (target)
-        local output_dir = path.join(os.projectdir(), "bin", target:name())
+        local target_type = is_config("target_type", "server") and "server" or "client"
+        local output_dir = path.join(os.projectdir(), "bin", target_type, target:name())
         os.mkdir(output_dir)
         os.cp(path.join(os.projectdir(), "config.jsonc"), path.join(output_dir, "config.jsonc"))
         local assets_dst = path.join(output_dir, "assets")

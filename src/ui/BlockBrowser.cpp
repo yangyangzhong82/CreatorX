@@ -137,6 +137,22 @@ bool matchesCategory(std::string const& id, Category const& category) {
     return std::ranges::any_of(category.keywords, [&id](auto word) { return id.find(word) != std::string::npos; });
 }
 
+std::string localizedBlockName(
+    Block const& block,
+    std::string const& id,
+    ::I18n& i18n,
+    std::shared_ptr<Localization const> const& locale
+) {
+    auto key = block.getDescriptionId();
+    if (locale) {
+        auto name = i18n.get(key, locale);
+        if (!name.empty() && name != key && name != id) return name;
+    }
+    auto name = block.getDisplayName();
+    if (!name.empty() && name != key && name != id && name != shortName(id)) return name;
+    return shortName(id);
+}
+
 struct Entry {
     std::string id;
     std::string name;
@@ -398,7 +414,103 @@ struct LiveBrowser {
     }
 };
 
+struct FillRow {
+    ll::ui::ObservableString  label{std::string{}};
+    ll::ui::ObservableString  tooltip{std::string{}};
+    ll::ui::ObservableBoolean visible{false};
+};
+
+Player* findPlayer(mce::UUID const& uuid);
+
+struct FillDdui {
+    static constexpr size_t pageSize = 12;
+
+    mce::UUID                 uuid;
+    State                     catalog;
+    FillSubmitted             submitted;
+    ll::ui::CustomForm        form;
+    ll::ui::ObservableNumber shape;
+    ll::ui::ObservableString  query{std::string{}, {.clientWritable = true}};
+    ll::ui::ObservableString  pattern{std::string{}, {.clientWritable = true}};
+    ll::ui::ObservableString  summary{std::string{}};
+    ll::ui::ObservableBoolean previousDisabled{true};
+    ll::ui::ObservableBoolean nextDisabled{true};
+    std::array<FillRow, pageSize> rows;
+    std::vector<Entry const*> matches;
+    size_t page{};
+    bool finished{};
+
+    FillDdui(Player& player, State state, size_t initialShape, std::string initialPattern, FillSubmitted action)
+    : uuid(player.getUuid()),
+      catalog(std::move(state)),
+      submitted(std::move(action)),
+      form(player, text("menu.fill_title")),
+      shape(double(std::min<size_t>(initialShape, 2)), {.clientWritable = true}),
+      pattern(std::move(initialPattern), {.clientWritable = true}) {}
+
+    void updatePage() {
+        auto pages = std::max<size_t>(1, (matches.size() + pageSize - 1) / pageSize);
+        page = std::min(page, pages - 1);
+        summary.setData(matches.empty() ? text("menu.blocks_empty") : tr("menu.blocks_page", matches.size(), page + 1, pages));
+        previousDisabled.setData(page == 0);
+        nextDisabled.setData(page + 1 == pages);
+        for (size_t i = 0; i < rows.size(); ++i) {
+            auto index = page * pageSize + i;
+            auto& row = rows[i];
+            if (index >= matches.size()) {
+                row.visible.setData(false);
+                continue;
+            }
+            auto const& entry = *matches[index];
+            row.label.setData(entry.name == shortName(entry.id) ? entry.name : entry.name + "\n" + shortName(entry.id));
+            row.tooltip.setData(entry.id);
+            row.visible.setData(true);
+        }
+    }
+
+    void filter() {
+        auto search = lower(query.getData());
+        auto tokens = edit::splitTokens(search);
+        matches.clear();
+        for (auto const& entry : catalog->all) {
+            auto searchable = lower(entry.name + " " + entry.id);
+            if (std::ranges::all_of(tokens, [&searchable](auto token) { return searchable.find(token) != std::string::npos; }))
+                matches.push_back(&entry);
+        }
+        if (!tokens.empty()) {
+            auto rank = [&search](Entry const* entry) {
+                auto name = lower(entry->name);
+                auto id = shortName(entry->id);
+                if (id == search || entry->id == search || name == search) return 0;
+                return id.starts_with(search) || name.starts_with(search) ? 1 : 2;
+            };
+            std::stable_sort(matches.begin(), matches.end(), [&rank](auto a, auto b) { return rank(a) < rank(b); });
+        }
+        page = 0;
+        updatePage();
+    }
+
+    void closeAndSubmit() {
+        if (finished) return;
+        finished = true;
+        auto selectedShape = shape.getData();
+        auto selectedPattern = pattern.getData();
+        auto action = submitted;
+        auto playerId = uuid;
+        (void)form.close();
+        ll::thread::ServerThreadExecutor::getDefault().execute(
+            [playerId, selectedShape, selectedPattern = std::move(selectedPattern), action = std::move(action)]() mutable {
+                if (auto* player = findPlayer(playerId)) {
+                    auto value = std::isfinite(selectedShape) ? size_t(std::clamp(selectedShape, 0.0, 2.0)) : 0;
+                    action(*player, value, std::move(selectedPattern));
+                }
+            }
+        );
+    }
+};
+
 std::unordered_map<mce::UUID, std::shared_ptr<LiveBrowser>> liveBrowsers;
+std::unordered_map<mce::UUID, std::shared_ptr<FillDdui>> liveFillForms;
 
 Player* findPlayer(mce::UUID const& uuid) {
     auto level = ll::service::getLevel();
@@ -433,7 +545,7 @@ void openLiveBrowser(Player& player, State catalog) {
     items.push_back({text("menu.blocks_all"), double(categories.size() + 2), {}});
     state->form.closeButton()
         .dropdown(text("menu.blocks_filter"), state->category, std::move(items))
-        .textField(text("menu.blocks_live_search"), state->query, {.description = text("menu.blocks_live_hint")})
+        .textField(text("menu.blocks_live_search"), state->query, {.description = text("menu.fill_search_hint")})
         .label(state->summary)
         .button(
             text("menu.block_previous"),
@@ -518,12 +630,7 @@ void openBlockBrowser(Player& player, BlockPicked picked) {
     for (auto const& id : edit::registeredBlockIds()) {
         auto block = Block::tryGetFromRegistry(HashedString(id));
         if (!block || edit::isDisallowed(*block)) continue;
-        auto name = shortName(id);
-        if (locale) {
-            auto key       = block->getDescriptionId();
-            auto localized = i18n.get(key, locale);
-            if (!localized.empty() && localized != key) name = std::move(localized);
-        }
+        auto name = localizedBlockName(*block, id, i18n, locale);
         std::string icon;
         auto        common = std::ranges::find_if(commonBlocks, [&id](auto const& entry) {
             return id == "minecraft:" + std::string(entry.id);
@@ -551,11 +658,110 @@ void openBlockBrowser(Player& player, BlockPicked picked) {
     openLiveBrowser(player, std::move(browser));
 }
 
+void openFillDdui(Player& player, size_t shape, std::string pattern, std::string error, FillSubmitted submitted) {
+    auto browser = std::make_shared<Browser>();
+    auto& i18n = ::getI18n();
+    auto locale = i18n.getLocaleFor(config.language);
+    for (auto const& id : edit::registeredBlockIds()) {
+        auto block = Block::tryGetFromRegistry(HashedString(id));
+        if (!block || edit::isDisallowed(*block)) continue;
+        auto name = localizedBlockName(*block, id, i18n, locale);
+        std::string icon;
+        auto common = std::ranges::find_if(commonBlocks, [&id](auto const& entry) {
+            return id == "minecraft:" + std::string(entry.id);
+        });
+        if (common != commonBlocks.end()) {
+            name = text("menu.block_name." + std::string(common->id));
+            if (*common->texture) icon = "textures/blocks/" + std::string(common->texture);
+        } else {
+            auto category = std::ranges::find_if(categories, [&id](auto const& entry) { return matchesCategory(id, entry); });
+            if (category != categories.end()) icon = category->icon;
+        }
+        browser->all.push_back({id, std::move(name), std::move(icon)});
+    }
+    for (auto const& common : commonBlocks) {
+        auto it = std::ranges::find(browser->all, "minecraft:" + std::string(common.id), &Entry::id);
+        if (it != browser->all.end()) browser->common.push_back(*it);
+    }
+    for (auto const& entry : getSession(player).recentPatterns) {
+        auto id = entry.find(':') == std::string::npos ? "minecraft:" + entry : entry;
+        auto it = std::ranges::find(browser->all, id, &Entry::id);
+        if (it != browser->all.end()) browser->recent.push_back(*it);
+    }
+
+    auto state = std::make_shared<FillDdui>(player, std::move(browser), shape, std::move(pattern), std::move(submitted));
+    auto weak = std::weak_ptr{state};
+    std::vector<ll::ui::DropdownItemData> shapeItems{
+        {text("menu.shape_all"), 0.0, {}},
+        {text("menu.shape_walls"), 1.0, {}},
+        {text("menu.shape_faces"), 2.0, {}}
+    };
+    state->form.closeButton();
+    if (!error.empty()) state->form.label("§c" + error + "§r");
+    state->form.label(text("menu.pattern_hint"));
+    state->form.dropdown(text("menu.shape"), state->shape, std::move(shapeItems))
+        .textField(text("menu.blocks_live_search"), state->query, {.description = text("menu.blocks_live_hint")})
+        .textField(text("menu.pattern_input"), state->pattern, {.description = text("menu.pattern_placeholder")})
+        .label(state->summary)
+        .button(text("menu.block_previous"), [weak] {
+            if (auto current = weak.lock(); current && !current->finished && current->page > 0) {
+                --current->page;
+                current->updatePage();
+            }
+        }, {.disabled = state->previousDisabled})
+        .button(text("menu.block_next"), [weak] {
+            if (auto current = weak.lock(); current && !current->finished
+                && (current->page + 1) * FillDdui::pageSize < current->matches.size()) {
+                ++current->page;
+                current->updatePage();
+            }
+        }, {.disabled = state->nextDisabled})
+        .divider();
+    for (size_t i = 0; i < state->rows.size(); ++i) {
+        auto& row = state->rows[i];
+        state->form.button(row.label, [weak, i] {
+            auto current = weak.lock();
+            if (!current || current->finished) return;
+            auto index = current->page * FillDdui::pageSize + i;
+            if (index < current->matches.size()) current->pattern.setData(current->matches[index]->id);
+        }, {.tooltip = row.tooltip, .visible = row.visible});
+    }
+    state->form.divider().button(text("menu.fill_submit"), [weak] {
+        if (auto current = weak.lock()) current->closeAndSubmit();
+    });
+    state->query.subscribe([weak](auto const&) {
+        if (auto current = weak.lock(); current && !current->finished) current->filter();
+    });
+    state->filter();
+    liveFillForms[state->uuid] = state;
+    ll::thread::ServerThreadExecutor::getDefault().execute([weak] {
+        auto current = weak.lock();
+        if (!current || current->finished) return;
+        auto shown = current->form.show([weak](ll::ui::CustomForm::Result) {
+            if (auto current = weak.lock()) {
+                current->finished = true;
+                liveFillForms.erase(current->uuid);
+            }
+        });
+        if (!shown) {
+            current->finished = true;
+            liveFillForms.erase(current->uuid);
+            if (auto* player = findPlayer(current->uuid)) player->sendMessage(text("menu.fill_dd_ui_error"));
+        }
+    });
+}
+
 
 void closeBlockBrowsers() {
     auto active = std::move(liveBrowsers);
     liveBrowsers.clear();
     for (auto const& [_, state] : active) {
+        state->finished = true;
+        (void)state->form.close();
+    }
+    auto fills = std::move(liveFillForms);
+    liveFillForms.clear();
+    for (auto const& [_, state] : fills) {
         state->finished = true;
         (void)state->form.close();
     }

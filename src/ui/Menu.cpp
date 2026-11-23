@@ -472,45 +472,13 @@ void openBuildOperation(
 
 void openFillForm(Player& player, size_t shape, std::optional<size_t> source, std::string input, std::string error) {
     if (!hasSelection(player)) return openSelectionMenu(player, text("menu.need_selection"), true);
-    auto choices = patternChoices(player, getSession(player).recentPatterns, false);
-
-    CustomForm form(text("menu.fill_title"));
-    auto       label = selectionSummary(player) + "\n" + text("menu.pattern_hint");
-    form.appendLabel(error.empty() ? label : "§c" + error + "§r\n" + label);
-    std::vector<std::string> shapeLabels{text("menu.shape_all"), text("menu.shape_walls"), text("menu.shape_faces")};
-    form.appendDropdown(
-        "shape",
-        text("menu.shape"),
-        shapeLabels,
-        std::min<size_t>(shape, 2)
-    );
-    form.appendDropdown(
-        "source",
-        text("menu.pattern_source"),
-        choices.labels(),
-        std::min(source.value_or(choices.preferred), choices.items.size() - 1)
-    );
-    form.appendInput("pattern", text("menu.pattern_input"), text("menu.pattern_placeholder"), input);
-    form.setSubmitButton(text("menu.fill_submit"));
-    form.sendTo(player, [choices, shapeLabels](Player& target, CustomFormResult const& result, FormCancelReason) {
-        if (!result) return openMain(target);
+    (void)source;
+    openFillDdui(player, shape, std::move(input), std::move(error), [](Player& target, size_t shapeIndex, std::string pattern) {
         static constexpr std::array shapes{core::BoxShape::all, core::BoxShape::walls, core::BoxShape::faces};
-        auto shape = std::ranges::find(shapeLabels, inputText(*result, "shape"));
-        auto shapeIndex = shape == shapeLabels.end() ? 0 : size_t(shape - shapeLabels.begin());
-        auto sourceIndex = choices.selectedIndex(*result, "source");
-        auto typed       = inputText(*result, "pattern");
-        if (choices.searches(sourceIndex)) {
-            return openBlockBrowser(target, [shapeIndex, typed](Player& p, std::string id) {
-                openFillForm(p, shapeIndex, 0, id.empty() ? typed : std::move(id));
-            });
-        }
-        auto pattern = pickPattern(*result, "pattern", "source", choices);
-        if (pattern.empty()) return openFillForm(target, shapeIndex, sourceIndex, typed, text("menu.need_pattern"));
+        if (pattern.empty()) return openFillForm(target, shapeIndex, {}, {}, text("menu.need_pattern"));
         std::string message;
-        if (!regionEdit(target, Feedback(target, &message), shapes[shapeIndex], pattern, std::nullopt)) {
-            // 把实际尝试的图案放进输入框，玩家可以直接改。
-            openFillForm(target, shapeIndex, 0, pattern, message);
-        }
+        if (!regionEdit(target, Feedback(target, &message), shapes[std::min<size_t>(shapeIndex, 2)], pattern, std::nullopt))
+            openFillForm(target, shapeIndex, {}, std::move(pattern), std::move(message));
     });
 }
 
