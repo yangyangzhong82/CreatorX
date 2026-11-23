@@ -6,6 +6,7 @@
 #include "command/AdvancedCommands.h"
 #include "command/SelectionCommands.h"
 #include "exec/JobScheduler.h"
+#include "input/BrushTools.h"
 #include "input/Shortcuts.h"
 #include "net/Enhancements.h"
 #include "visual/PastePreview.h"
@@ -66,6 +67,7 @@ bool Entry::enable() {
     enableSelectionCommands();
     enableEditCommands();
     enableAdvancedCommands();
+    enableBrushTools();
     enableEnhancements();
     enablePreviews();
     logger.info(tr("mod.enabled"));
@@ -77,6 +79,7 @@ bool Entry::disable() {
     ui::closeBlockBrowsers();
     disableEditCommands();
     disableAdvancedCommands();
+    disableBrushTools();
     disableEnhancements();
     disablePreviews();
     disableSelectionCommands();

@@ -2,19 +2,27 @@
 #include "mod/Global.h"
 #include "session/PlayerSession.h"
 #include "exec/JobScheduler.h"
+#include "input/BrushTools.h"
 #include "ll/api/network/packet/Packet.h"
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/world/ServerLevelTickEvent.h"
+#include "ll/api/service/Bedrock.h"
+#include "ll/api/thread/ServerThreadExecutor.h"
 #include "mc/deps/core/utility/BinaryStream.h"
+#include "mc/network/NetworkIdentifier.h"
+#include "mc/network/ServerNetworkHandler.h"
+#include "mc/server/ServerPlayer.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/level/Level.h"
 #ifdef LL_PLAT_C
 #include "ll/api/event/world/ClientLevelTickEvent.h"
 #include "ll/api/event/client/ClientExitLevelEvent.h"
-#include "ll/api/service/Bedrock.h"
+#include "ll/api/event/input/MouseInputEvent.h"
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/gui/GuiData.h"
+#include "mc/deps/input/MouseAction.h"
+#include "mc/world/item/ItemStack.h"
 #endif
 #include <mutex>
 #include <atomic>
@@ -38,9 +46,112 @@ public:
     void write(BinaryStream& stream) const override { stream.writeString(text,nullptr,nullptr); }
     Bedrock::Result<void> read(ReadOnlyBinaryStream& stream) override { return stream.getString(text,16384); }
 };
+
+class BrushBindingPacket final : public ll::network::Packet {
+public:
+    static constexpr std::string_view CustomPacketId = "creatorx:brush_binding";
+    static constexpr uint PacketVersion = 1;
+    static constexpr bool Optional = true;
+    static constexpr PacketSide Side = PacketSide::Client;
+
+    std::string item;
+    bool handlesLeft = false;
+
+    std::string_view getName() const override { return CustomPacketId; }
+    PacketRuntimeId getRuntimeId() const override { return getPacketRuntimeId<BrushBindingPacket>; }
+    void write(BinaryStream& stream) const override {
+        stream.writeBool(handlesLeft, nullptr, nullptr);
+        stream.writeString(item, nullptr, nullptr);
+    }
+    Bedrock::Result<void> read(ReadOnlyBinaryStream& stream) override {
+        auto left = stream.getBool();
+        if (!left) return nonstd::unexpected(left.error());
+        handlesLeft = *left;
+        return stream.getString(item, 512);
+    }
+};
+
+class BrushClickPacket final : public ll::network::Packet {
+public:
+    static constexpr std::string_view CustomPacketId = "creatorx:brush_click";
+    static constexpr uint PacketVersion = 1;
+    static constexpr bool Optional = true;
+    static constexpr PacketSide Side = PacketSide::Server;
+
+    bool left = false;
+
+    std::string_view getName() const override { return CustomPacketId; }
+    PacketRuntimeId getRuntimeId() const override { return getPacketRuntimeId<BrushClickPacket>; }
+    void write(BinaryStream& stream) const override { stream.writeBool(left, nullptr, nullptr); }
+    Bedrock::Result<void> read(ReadOnlyBinaryStream& stream) override {
+        auto result = stream.getBool();
+        if (!result) return nonstd::unexpected(result.error());
+        left = *result;
+        return {};
+    }
+};
+
+class BrushClickHandler final : public IPacketHandler {
+public:
+    void handle(NetworkIdentifier const& source, NetEventCallback&, PacketSide, ll::network::Packet const& raw) const override {
+        auto const& packet = static_cast<BrushClickPacket const&>(raw);
+        ll::thread::ServerThreadExecutor::getDefault().execute([source, subId = packet.mSenderSubId, left = packet.left] {
+            auto network = ll::service::getServerNetworkHandler(false);
+            if (!network) return;
+            if (auto* player = network->_getServerPlayer(source, subId)) {
+                handleBrushClick(*player, player->getSelectedItem(), left);
+            }
+        });
+    }
+} brushClickHandler;
+
 ll::event::ListenerPtr serverTick;
 #ifdef LL_PLAT_C
-ll::event::ListenerPtr clientTick, exitListener;
+ll::event::ListenerPtr clientTick, exitListener, mouseListener;
+std::mutex brushBindingMutex;
+std::string boundBrushItem;
+bool brushHandlesLeft = false;
+
+class BrushBindingHandler final : public IPacketHandler {
+public:
+    void handle(NetworkIdentifier const&, NetEventCallback&, PacketSide, ll::network::Packet const& raw) const override {
+        auto const& packet = static_cast<BrushBindingPacket const&>(raw);
+        std::lock_guard lock(brushBindingMutex);
+        boundBrushItem = packet.item;
+        brushHandlesLeft = packet.handlesLeft;
+    }
+} brushBindingHandler;
+
+void resetBrushBinding() {
+    std::lock_guard lock(brushBindingMutex);
+    boundBrushItem.clear();
+    brushHandlesLeft = false;
+}
+
+void sendBrushClick(ll::event::MouseInputEvent& event) {
+    if (event.isCancelled() || event.buttonData() != MouseAction::DataDown) return;
+    auto action = event.actionButtonId();
+    if (action != MouseAction::ActionLeft && action != MouseAction::ActionRight) return;
+    auto client = ll::service::getClientInstance();
+    if (!client || !client->isInGameInputEnabled()) return;
+    auto* player = client->getLocalPlayer();
+    if (!player) return;
+
+    bool left = action == MouseAction::ActionLeft;
+    {
+        std::lock_guard lock(brushBindingMutex);
+        if (boundBrushItem.empty() || (left && !brushHandlesLeft)) return;
+        auto const& item = player->getSelectedItem();
+        if (item.isNull() || item.getTypeName() != boundBrushItem) return;
+    }
+    BrushClickPacket packet;
+    if (!packet.canSendToServer()) return;
+    packet.mSenderSubId = player->getClientSubId();
+    packet.left = left;
+    event.cancel();
+    packet.sendToServer();
+}
+
 std::atomic_bool hudEnabled=true,localCoordinates=true;
 std::mutex hudMutex;
 std::string hud;
@@ -75,6 +186,15 @@ public:
 }
 bool hasEnhancedClient(Player const& player) { return StatusPacket::canSendTo(player); }
 
+bool syncBrushBinding(Player const& player, std::string_view item, bool handlesLeft) {
+    BrushBindingPacket packet;
+    if (!packet.canSendTo(player)) return false;
+    packet.item = item;
+    packet.handlesLeft = handlesLeft;
+    packet.sendTo(player);
+    return true;
+}
+
 void noteHudActivity(Player const& player) {
     getSession(player).lastHudActivity = Clock::now();
 }
@@ -101,8 +221,16 @@ void noteLocalHudActivity() {
 void registerEnhancementProtocol() {
     auto& registry=ll::network::PacketRegistrar::getInstance();
     registry.registerPacket("creatorx:status",getPacketRuntimeId<StatusPacket>,[] { return std::make_unique<StatusPacket>(); },StatusPacket::Side,StatusPacket::Optional);
+    registry.registerPacket(BrushBindingPacket::CustomPacketId, getPacketRuntimeId<BrushBindingPacket>,
+                            [] { return std::make_unique<BrushBindingPacket>(); }, BrushBindingPacket::Side,
+                            BrushBindingPacket::Optional);
+    registry.registerPacket(BrushClickPacket::CustomPacketId, getPacketRuntimeId<BrushClickPacket>,
+                            [] { return std::make_unique<BrushClickPacket>(); }, brushClickHandler,
+                            BrushClickPacket::Side, BrushClickPacket::Optional);
 #ifdef LL_PLAT_C
     registry.registerHandler("creatorx:status",getPacketRuntimeId<StatusPacket>,handler,PacketSide::Client);
+    registry.registerHandler(BrushBindingPacket::CustomPacketId, getPacketRuntimeId<BrushBindingPacket>,
+                             brushBindingHandler, BrushBindingPacket::Side);
 #endif
 }
 void refreshEnhancementOptions() {
@@ -146,6 +274,7 @@ void enableEnhancements() {
         }));
     });
 #ifdef LL_PLAT_C
+    mouseListener = ll::event::EventBus::getInstance().emplaceListener<ll::event::MouseInputEvent>(sendBrushClick);
     clientTick=ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientLevelTickEvent>([ticks=0](auto&) mutable {
         if(++ticks<10) return;
         ticks=0;
@@ -180,6 +309,7 @@ void enableEnhancements() {
     });
     exitListener=ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientExitLevelEvent>([](auto&) {
         resetHud();
+        resetBrushBinding();
     });
 #endif
 }
@@ -190,11 +320,17 @@ void disableEnhancements() {
 #ifdef LL_PLAT_C
     if(clientTick) bus.removeListener(clientTick);
     if(exitListener) bus.removeListener(exitListener);
+    if(mouseListener) bus.removeListener(mouseListener);
     clientTick.reset(); exitListener.reset();
+    mouseListener.reset();
     resetHud();
+    resetBrushBinding();
 #endif
 }
 void unregisterEnhancementProtocol() {
-    ll::network::PacketRegistrar::getInstance().unregisterPacket(getPacketRuntimeId<StatusPacket>);
+    auto& registry = ll::network::PacketRegistrar::getInstance();
+    registry.unregisterPacket(getPacketRuntimeId<BrushClickPacket>);
+    registry.unregisterPacket(getPacketRuntimeId<BrushBindingPacket>);
+    registry.unregisterPacket(getPacketRuntimeId<StatusPacket>);
 }
 }

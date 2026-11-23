@@ -3,6 +3,7 @@
 #include "command/Feedback.h"
 #include "core/region/Box.h"
 #include "core/region/CuboidSelection.h"
+#include "edit/Pattern.h"
 
 #include <optional>
 #include <string_view>
@@ -35,6 +36,9 @@ bool replaceBlocks(Player& player, Feedback const& output, std::string_view text
 bool copySelection(Player& player, Feedback const& output, bool cut, std::optional<std::string_view> pattern, std::optional<std::string_view> mask = {}, bool includeEntities = false);
 bool pasteClipboard(Player& player, Feedback const& output, PasteOptions options);
 bool confirmPastePreview(Player& player, Feedback const& output);
+bool pasteClipboardAtBrush(
+    Player& player, Feedback const& output, core::Vec3i target, bool skipAir, bool original, std::optional<edit::Mask> mask
+);
 bool adjustPastePreview(Player& player, Feedback const& output, core::Vec3i offset, int rotation);
 bool runHistory(Player& player, Feedback const& output, bool undo, int times, std::string_view target = {});
 void cancelPlayerJob(Player& player, Feedback const& output);

@@ -268,6 +268,10 @@ Pattern Pattern::single(Block const& block) {
     return pattern;
 }
 
+bool Pattern::isAllowed() const {
+    return std::ranges::none_of(mBlocks, [](Block const* block) { return isDisallowed(*block); });
+}
+
 Block const& Pattern::apply(std::mt19937& random) const {
     if (mBlocks.size() == 1) return *mBlocks.front();
     double roll = std::uniform_real_distribution<double>(0, mCumulative.back())(random);

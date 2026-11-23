@@ -37,7 +37,13 @@ std::unique_ptr<exec::Job> makeCopy(
 );
 
 std::unique_ptr<exec::Job>
-makePaste(mce::UUID owner, int dimension, std::shared_ptr<Clipboard const> clipboard, core::Vec3i min, bool skipAir, std::optional<Mask> mask = {}, bool includeEntities = false);
+makePaste(mce::UUID owner, int dimension, std::shared_ptr<Clipboard const> clipboard, core::Vec3i min, bool skipAir, std::optional<Mask> mask = {}, bool includeEntities = false, bool maskTarget = false);
+
+// iterations 为 0 时执行重力，其余情况用指定次数平滑地表。
+std::unique_ptr<exec::Job> makeTerrainBrush(
+    mce::UUID owner, int dimension, core::Vec3i center, core::Box box, int radius, int iterations,
+    std::optional<Mask> mask
+);
 
 // 撤销或重做 sets（按弹出顺序处理）；中途取消时未写回的部分退回原来的栈。
 std::unique_ptr<exec::Job> makeHistory(mce::UUID owner, bool undo, std::vector<ChangeSet> sets, mce::UUID requester);

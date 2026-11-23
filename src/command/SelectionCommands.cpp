@@ -1,6 +1,7 @@
 #include "command/SelectionCommands.h"
 
 #include "core/region/CuboidSelection.h"
+#include "input/BrushTools.h"
 #include "mod/Global.h"
 #include "net/Enhancements.h"
 #include "session/PlayerSession.h"
@@ -165,7 +166,8 @@ LL_TYPE_INSTANCE_HOOK(
     bool&           hasDestroyedBlock
 ) {
     Player& player = mPlayer;
-    if (tryWandClick(player, position, true, player.getSelectedItem())) {
+    if (handleBrushClick(player, player.getSelectedItem(), true)
+        || tryWandClick(player, position, true, player.getSelectedItem())) {
         hasDestroyedBlock = false;
         return false;
     }
@@ -543,14 +545,21 @@ void enableSelectionCommands() {
     if (auto registry = ll::service::getCommandRegistry(false)) registerCommands(*registry);
     destroyListener = bus.emplaceListener<ll::event::PlayerDestroyBlockEvent>([](auto& event) {
         auto& player = event.self();
-        if (!event.isCancelled() && tryWandClick(player, event.pos(), true, player.getSelectedItem())) event.cancel();
+        if (!event.isCancelled() && (handleBrushClick(player, player.getSelectedItem(), true)
+            || tryWandClick(player, event.pos(), true, player.getSelectedItem()))) event.cancel();
     });
     interactListener = bus.emplaceListener<ll::event::PlayerInteractBlockEvent>([](auto& event) {
-        if (!event.isCancelled() && tryWandClick(event.self(), event.blockPos(), false, event.item())) event.cancel();
+        if (!event.isCancelled() && (handleBrushClick(event.self(), event.item(), false)
+            || tryWandClick(event.self(), event.blockPos(), false, event.item()))) event.cancel();
     });
     useItemListener = bus.emplaceListener<ll::event::PlayerUseItemEvent>([](auto& event) {
         auto& player = event.self();
-        if (event.isCancelled() || !isWand(player, event.item())) return;
+        if (event.isCancelled()) return;
+        if (handleBrushClick(player, event.item(), false)) {
+            event.cancel();
+            return;
+        }
+        if (!isWand(player, event.item())) return;
         auto& session = getSession(player);
         if (!session.wandEnabled) return;
         if (tryOpenMenu(player, session)) {
@@ -563,6 +572,7 @@ void enableSelectionCommands() {
     swingListener = bus.emplaceListener<ll::event::PlayerSwingEvent>([](auto& event) {
         auto& player = event.self();
         auto const& item = player.getSelectedItem();
+        if (handleBrushClick(player, item, true)) return;
         if (!isWand(player, item)) return;
         auto& session = getSession(player);
         if (!session.wandEnabled || !session.remoteWand) return;

@@ -3,6 +3,7 @@
 #include "core/region/CuboidSelection.h"
 #include "edit/ChangeSet.h"
 #include "edit/Clipboard.h"
+#include "input/BrushTools.h"
 
 #include "mc/platform/UUID.h"
 
@@ -12,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 class Player;
 
@@ -44,6 +46,10 @@ struct PlayerSession {
     edit::History                          history;
     std::deque<std::string>                recentPatterns; // 最近使用的图案，最新的在前
     std::deque<std::string>                recentMasks;
+    std::unordered_map<std::string, BrushBinding> brushBindings;
+    std::chrono::steady_clock::time_point         lastBrushLeft{};
+    std::chrono::steady_clock::time_point         lastBrushRight{};
+    std::string                                   syncedBrushItem;
 };
 
 // 记入最近使用列表：去重、置顶，最多保留 10 条。

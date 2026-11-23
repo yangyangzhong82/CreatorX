@@ -163,4 +163,29 @@ void clearSelectionOutline(Player const& player, bool preview) {
     outline.sendTo(player);
 }
 
+void showBrushTarget(Player const& player, core::Vec3i position) {
+    std::array<float, 3> low{position.x - 0.015f, position.y - 0.015f, position.z - 0.015f};
+    auto dimension = player.getDimensionId();
+    mce::Color color{90, 210, 255};
+    constexpr float edgeLength = 1.03f;
+    std::vector<PrimitiveShapeDataPayload> shapes;
+    shapes.reserve(12);
+    for (size_t axis = 0; axis < low.size(); ++axis) {
+        for (size_t side = 0; side < 4; ++side) {
+            auto point = low;
+            if (side & 1) point[(axis + 1) % 3] += edgeLength;
+            if (side & 2) point[(axis + 2) % 3] += edgeLength;
+            Vec3 start{point[0], point[1], point[2]};
+            point[axis] += edgeLength;
+            auto shape = selectionLine(40 + axis * 4 + side, dimension, start, {point[0], point[1], point[2]}, color);
+            *shape.mTimeLeftTotalSec = 0.35f;
+            shapes.push_back(std::move(shape));
+        }
+    }
+    auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::PrimitiveShapesPacket);
+    auto& outline = static_cast<PrimitiveShapesPacket&>(*packet);
+    *outline.mShapes = std::move(shapes);
+    outline.sendTo(player);
+}
+
 } // namespace creatorx

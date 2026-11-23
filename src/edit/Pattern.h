@@ -29,6 +29,7 @@ public:
     static Pattern                single(Block const& block);
 
     Block const& apply(std::mt19937& random) const;
+    bool         isAllowed() const;
 
 private:
     std::vector<Block const*> mBlocks;

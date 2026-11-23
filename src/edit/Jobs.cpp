@@ -240,6 +240,176 @@ private:
     Clock::time_point mStart = Clock::now();
 };
 
+class TerrainBrushJob final : public exec::Job {
+public:
+    TerrainBrushJob(
+        mce::UUID owner, int dimension, core::Vec3i center, core::Box box, int radius, int iterations,
+        std::optional<Mask> mask
+    )
+    : mOwner(owner), mDimension(dimension), mCenter(center), mBox(box), mWidth(box.size().x),
+      mColumns(mWidth * box.size().z), mRadius(radius), mIterations(iterations), mMask(std::move(mask)),
+      mChanges(dimension), mHeights(iterations ? mColumns : 0), mSurface(mHeights), mNext(mHeights) {
+        mChanges.label = iterations ? "brush smooth" : "brush gravity";
+    }
+
+    std::uint64_t total() const override { return mColumns * (mIterations ? mIterations + 2 : 1); }
+    std::uint64_t progress() const override { return mPhase * mColumns + mColumn; }
+
+    exec::JobState run(Level& level, exec::Budget const& budget) override {
+        auto* region = exec::regionOf(level, mDimension);
+        if (!region) {
+            mError = tr("job.no_dimension");
+            return exec::JobState::failed;
+        }
+
+        mChunks.beginTick();
+        std::uint64_t used = 0;
+        while (!budget.exhausted(used, 0)) {
+            if (mColumn == mColumns) {
+                if (progress() == total()) return exec::JobState::done;
+                if (mPhase > 0) mHeights.swap(mNext);
+                mColumn = 0;
+                ++mPhase;
+            }
+            core::Vec3i p{mBox.min.x + mColumn % mWidth, mBox.max.y, mBox.min.z + mColumn / mWidth};
+            auto dx = p.x - mCenter.x;
+            auto dz = p.z - mCenter.z;
+            bool inside = dx * dx + dz * dz <= mRadius * mRadius;
+
+            if (mIterations && mPhase > 0 && mPhase <= mIterations) {
+                mNext[mColumn] = inside ? averageHeight() : mHeights[mColumn];
+                ++used;
+            } else if (inside || (mIterations && mPhase == 0)) {
+                auto state = mChunks.prepare(level, *region, mOwner, p);
+                if (state == ChunkAccess::State::loading) return exec::JobState::running;
+                if (state == ChunkAccess::State::failed) {
+                    mError = chunkError(p);
+                    return exec::JobState::failed;
+                }
+                if (!mIterations) {
+                    used += applyGravity(*region, p);
+                } else {
+                    if (mPhase == 0) mSurface[mColumn] = mHeights[mColumn] = findSurface(*region, p);
+                    else applySmoothing(*region, p);
+                    used += mBox.size().y;
+                }
+            } else {
+                ++used;
+            }
+            ++mColumn;
+        }
+        return exec::JobState::running;
+    }
+
+    void finish(Player* player, exec::JobEnd end) override {
+        finishEdit(mOwner, player, end, mChanges, mChanged, mError, mStart);
+    }
+
+private:
+    bool matches(Block const& block) const { return !mMask || mMask->test(block); }
+
+    static bool terrainBlock(BlockSource& region, BlockPos const& pos, Block const& block) {
+        if (!block._isSolid() || isDisallowed(block)
+            || block.getBlockType().mBlockEntityType != BlockActorType::Undefined
+            || !region.getExtraBlock(pos).isAir()) return false;
+        auto const& tag = *block.mSerializationId;
+        if (!tag.contains("states")) return true;
+        auto const& states = tag["states"].get<CompoundTag>();
+        return !states.contains("upper_block_bit") && !states.contains("head_piece_bit");
+    }
+
+    int findSurface(BlockSource& region, core::Vec3i p) const {
+        for (; p.y >= mBox.min.y; --p.y) {
+            if (region.getBlock({p.x, p.y, p.z})._isSolid()) return p.y;
+        }
+        return mBox.min.y - 1;
+    }
+
+    double averageHeight() const {
+        auto height = mHeights[mColumn];
+        if (height < mBox.min.y) return height;
+        double sum = height;
+        int count = 1;
+        auto include = [&](int index) {
+            if (mHeights[index] >= mBox.min.y) {
+                sum += mHeights[index];
+                ++count;
+            }
+        };
+        if (mColumn % mWidth > 0) include(mColumn - 1);
+        if (mColumn % mWidth + 1 < mWidth) include(mColumn + 1);
+        if (mColumn >= mWidth) include(mColumn - mWidth);
+        if (mColumn + mWidth < mColumns) include(mColumn + mWidth);
+        return sum / count;
+    }
+
+    void applySmoothing(BlockSource& region, core::Vec3i p) {
+        int surface = int(mSurface[mColumn]);
+        int target = int(std::lround(mHeights[mColumn]));
+        if (surface == target || findSurface(region, p) != surface) return;
+
+        p.y = surface;
+        auto const& top = region.getBlock({p.x, p.y, p.z});
+        if (!terrainBlock(region, {p.x, p.y, p.z}, top)) return;
+        if (surface < target) {
+            for (++p.y; p.y <= target; ++p.y) {
+                BlockPos pos{p.x, p.y, p.z};
+                auto const& block = region.getBlock(pos);
+                if (!block.isAir() || !region.getExtraBlock(pos).isAir() || !matches(block)) break;
+                if (writeBlock(region, p, top, airBlock(), nullptr, &mChanges)) ++mChanged;
+            }
+        } else {
+            for (; p.y > target; --p.y) {
+                BlockPos pos{p.x, p.y, p.z};
+                auto const& block = region.getBlock(pos);
+                if (!terrainBlock(region, pos, block) || !matches(block)) break;
+                if (writeBlock(region, p, airBlock(), airBlock(), nullptr, &mChanges)) ++mChanged;
+            }
+        }
+    }
+
+    int applyGravity(BlockSource& region, core::Vec3i p) {
+        int minY = region.getMinHeight();
+        int height = mBox.max.y - minY + 1;
+        mColumnBlocks.resize(height);
+        int landing = 0;
+        for (int i = 0; i < height; ++i) {
+            BlockPos pos{p.x, minY + i, p.z};
+            auto const& block = region.getBlock(pos);
+            mColumnBlocks[i] = &block;
+            if (block.isAir() && region.getExtraBlock(pos).isAir()) continue;
+            if (pos.y >= mBox.min.y && landing < i && matches(block) && terrainBlock(region, pos, block)) {
+                mColumnBlocks[landing++] = &block;
+                mColumnBlocks[i] = &airBlock();
+            } else {
+                landing = i + 1;
+            }
+        }
+        for (int i = 0; i < height; ++i) {
+            p.y = minY + i;
+            auto const& old = region.getBlock({p.x, p.y, p.z});
+            if (&old != mColumnBlocks[i] && writeBlock(region, p, *mColumnBlocks[i], airBlock(), nullptr, &mChanges, &old)) {
+                ++mChanged;
+            }
+        }
+        return height * 2;
+    }
+
+    mce::UUID           mOwner;
+    int                 mDimension;
+    core::Vec3i         mCenter;
+    core::Box           mBox;
+    int                 mWidth, mColumns, mRadius, mIterations;
+    std::optional<Mask> mMask;
+    ChangeSet           mChanges;
+    ChunkAccess         mChunks;
+    std::vector<double> mHeights, mSurface, mNext;
+    std::vector<Block const*> mColumnBlocks;
+    int                 mPhase = 0, mColumn = 0;
+    std::uint64_t       mChanged = 0;
+    Clock::time_point   mStart = Clock::now();
+};
+
 class InspectJob final : public exec::Job {
 public:
     InspectJob(mce::UUID owner, int dimension, core::Box box, std::optional<Mask> mask)
@@ -612,14 +782,16 @@ private:
 
 class PasteJob final : public exec::Job {
 public:
-    PasteJob(mce::UUID owner, int dimension, std::shared_ptr<Clipboard const> clipboard, core::Vec3i min, bool skipAir, std::optional<Mask> mask, bool includeEntities)
+    PasteJob(mce::UUID owner, int dimension, std::shared_ptr<Clipboard const> clipboard, core::Vec3i min, bool skipAir, std::optional<Mask> mask, bool includeEntities, bool maskTarget)
     : mOwner(owner),
       mDimension(dimension),
       mClipboard(std::move(clipboard)),
       mBox{min, min + mClipboard->size - core::Vec3i{1, 1, 1}},
       mSkipAir(skipAir),
       mIterator(mBox),
-      mChanges(dimension), mMask(std::move(mask)), mIncludeEntities(includeEntities) {mChanges.label="paste";}
+      mChanges(dimension), mMask(std::move(mask)), mIncludeEntities(includeEntities), mMaskTarget(maskTarget) {
+        mChanges.label = maskTarget ? "brush clipboard" : "paste";
+    }
 
     std::uint64_t total() const override { return mBox.volume(); }
     std::uint64_t progress() const override { return mVisited; }
@@ -658,7 +830,7 @@ public:
             auto  p     = *current;
             auto  index = mClipboard->index(p - mBox.min);
             auto [block, extra] = mClipboard->at(index);
-            if (block && (!mSkipAir || !block->isAir()) && (!mMask || mMask->test(*block))) {
+            if (block && (!mSkipAir || !block->isAir()) && (mMaskTarget || !mMask || mMask->test(*block))) {
                 ++used;
                 if (isDisallowed(*block)) {
                     ++mDenied;
@@ -671,7 +843,8 @@ public:
                     }
                     auto               entity = mClipboard->entities.find(index);
                     CompoundTag const* tag    = entity == mClipboard->entities.end() ? nullptr : &entity->second;
-                    if (writeBlock(*region, p, *block, extra ? *extra : airBlock(), tag, &mChanges)) ++mChanged;
+                    if ((!mMaskTarget || !mMask || mMask->test(region->getBlock({p.x, p.y, p.z})))
+                        && writeBlock(*region, p, *block, extra ? *extra : airBlock(), tag, &mChanges)) ++mChanged;
                 }
             }
             mIterator.advance();
@@ -698,6 +871,7 @@ private:
     Clock::time_point                mStart   = Clock::now();
     std::optional<Mask> mMask;
     bool mIncludeEntities;
+    bool mMaskTarget;
     size_t mActorIndex=0;
 };
 
@@ -838,8 +1012,14 @@ makeCopy(mce::UUID owner, int dimension, core::Box box, core::Vec3i offset, std:
 }
 
 std::unique_ptr<exec::Job>
-makePaste(mce::UUID owner, int dimension, std::shared_ptr<Clipboard const> clipboard, core::Vec3i min, bool skipAir, std::optional<Mask> mask, bool includeEntities) {
-    return std::make_unique<PasteJob>(owner, dimension, std::move(clipboard), min, skipAir,std::move(mask),includeEntities);
+makePaste(mce::UUID owner, int dimension, std::shared_ptr<Clipboard const> clipboard, core::Vec3i min, bool skipAir, std::optional<Mask> mask, bool includeEntities, bool maskTarget) {
+    return std::make_unique<PasteJob>(owner, dimension, std::move(clipboard), min, skipAir, std::move(mask), includeEntities, maskTarget);
+}
+
+std::unique_ptr<exec::Job> makeTerrainBrush(
+    mce::UUID owner, int dimension, core::Vec3i center, core::Box box, int radius, int iterations, std::optional<Mask> mask
+) {
+    return std::make_unique<TerrainBrushJob>(owner, dimension, center, box, radius, iterations, std::move(mask));
 }
 
 std::unique_ptr<exec::Job> makeHistory(mce::UUID owner, bool undo, std::vector<ChangeSet> sets, mce::UUID requester) {

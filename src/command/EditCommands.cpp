@@ -516,6 +516,22 @@ bool submitPaste(Player& player, Feedback const& output, PastePlacement placemen
 }
 } // namespace
 
+bool pasteClipboardAtBrush(
+    Player& player, Feedback const& output, core::Vec3i target, bool skipAir, bool original, std::optional<edit::Mask> mask
+) {
+    auto clipboard = getSession(player).clipboard;
+    if (!clipboard) {
+        output.error(tr("clipboard.empty"));
+        return false;
+    }
+    auto box = placementBox(player, output, original ? clipboard->origin : target,
+                            original ? core::Vec3i{} : clipboard->offset, clipboard->size);
+    if (!box) return false;
+    auto job = edit::makePaste(player.getUuid(), player.getDimensionId(), clipboard, box->min, skipAir, std::move(mask),
+                              false, true);
+    return startJob(player, output, std::move(job), clipboard->volume());
+}
+
 bool pasteClipboard(Player& player, Feedback const& output, PasteOptions options) {
     auto clipboard = getSession(player).clipboard;
     if (!clipboard) {
