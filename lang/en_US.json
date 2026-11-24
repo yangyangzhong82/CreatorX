@@ -470,7 +470,7 @@
     "help.reload": "/cx reload",
     "help.schem": "/cx schem opens the schematics menu.\nSubcommands: export <file> [format] [-e] | place <file> [format] [-a] [-e] | save/load/delete <file> [format] | list [search]",
     "help.help": "/cx help [command]",
-    "help.index": "CreatorX commands:\nsel, chunk, gmask, wand, pos1, pos2, hpos1, hpos2, size, desel, togglewand, expand, contract, shift, outset, inset, set, replace, walls, faces, outline, hollow, overlay, center, move, stack, sphere, hsphere, cyl, hcyl, pyramid, hpyramid, count, distr, copy, cut, paste, rotate, flip, clearclipboard, undo, redo, history, clearhistory, cancel, menu, reload, schem, brush, tool, mask, mat, range, none, help\nUse /cx help <command> for syntax.",
+    "help.index": "CreatorX commands:\nsel, chunk, gmask, setbiome, wand, pos1, pos2, hpos1, hpos2, size, desel, togglewand, expand, contract, shift, outset, inset, set, replace, walls, faces, outline, hollow, overlay, center, move, stack, sphere, hsphere, cyl, hcyl, pyramid, hpyramid, count, distr, copy, cut, paste, rotate, flip, clearclipboard, undo, redo, history, clearhistory, cancel, menu, reload, schem, brush, tool, mask, mat, range, none, help\nUse /cx help <command> for syntax.",
     "menu.adjust_selection": "Shift / Outset / Inset Selection",
     "menu.copy_options": "Copy / Cut Options",
     "menu.copy_entities": "Include entities (mobs, armor stands, etc., not players)",
@@ -490,5 +490,8 @@
     "help.masks": "\n>stone  <stone  #surface  %30  $plains  #tag:minecraft:logs\n/cx gmask <mask>  /cx gmask",
     "help.sel": "/cx sel <cuboid|poly|ellipsoid|sphere|cyl|convex>: change mode and clear selection. poly/convex: pos1 starts, pos2 adds vertices. sphere/ellipsoid/cyl: pos1 sets the center, pos2 sets radii.",
     "help.chunk": "/cx chunk: select the current chunk across the full dimension height.",
-    "help.gmask": "/cx gmask [mask]: set a global write mask intersected with operation masks. Omit the mask or use off to clear. Copying, inspection and undo/redo are unaffected."
+    "help.gmask": "/cx gmask [mask]: set a global write mask intersected with operation masks. Omit the mask or use off to clear. Copying, inspection and undo/redo are unaffected.",
+    "command.setbiome": "CreatorX: change the selection biome",
+    "biome.unknown": "Unknown biome: {}. Choose a biome ID from command suggestions.",
+    "help.setbiome": "/cx setbiome <biome ID>: change biomes inside the selection, e.g. /cx setbiome plains. Supports all selection shapes, the global mask and undo/redo."
 }

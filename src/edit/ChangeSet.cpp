@@ -1,4 +1,5 @@
 #include "edit/ChangeSet.h"
+#include "edit/Biome.h"
 
 #include "mod/Global.h"
 #include "storage/Nbt.h"
@@ -101,6 +102,11 @@ CompoundTag ChangeSet::serialize() const {
         {"pos",storage::vector(actor.pos)},{"id",actor.id},{"added",actor.added},{"nbt",*actor.tag}
     }));
     tag["actors"]=std::move(actors);
+    auto biomes = Nbt::array();
+    for (auto const& entry : mBiomes) biomes.push_back(Nbt::object({
+        {"pos", storage::vector(entry.pos)}, {"old", entry.oldBiome}, {"new", entry.newBiome}
+    }));
+    tag["biomes"] = std::move(biomes);
     return tag;
 }
 
@@ -134,6 +140,10 @@ ChangeSet ChangeSet::deserialize(CompoundTag const& tag) {
         auto const& actor=value.get<CompoundTag>();
         result.mActors.push_back({storage::vector(actor["pos"]),actor["id"].get<std::int64_t>(),bool(actor["added"]),std::make_shared<CompoundTag>(actor["nbt"].get<CompoundTag>())});
     }
+    if (tag.contains("biomes")) for (auto const& value : tag["biomes"].get<ListTag>()) {
+        auto const& entry = value.get<CompoundTag>();
+        result.mBiomes.push_back({storage::vector(entry["pos"]), std::string(entry["old"]), std::string(entry["new"])});
+    }
     return result;
 }
 
@@ -146,6 +156,7 @@ bool ChangeSet::trySpill() {
     }
     std::vector<Entry>{}.swap(mEntries);
     std::vector<ActorEntry>{}.swap(mActors);
+    std::vector<BiomeEntry>{}.swap(mBiomes);
     mPool.reset();
     return true;
 }
@@ -229,7 +240,19 @@ void ChangeSet::recordActor(core::Vec3i pos,std::int64_t id,CompoundTag tag,bool
     mActors.push_back({pos,id,added,std::make_shared<CompoundTag>(std::move(tag))});
 }
 
+void ChangeSet::recordBiome(core::Vec3i pos, std::string oldBiome, std::string newBiome) {
+    mDiskPath.clear();
+    mBiomes.push_back({pos, std::move(oldBiome), std::move(newBiome)});
+}
+
 void ChangeSet::apply(BlockSource& region, size_t index, bool undo) {
+    if (isBiome(index)) {
+        auto const& entry = mBiomes[index-mEntries.size()-mActors.size()];
+        auto biome = findBiome(region.getLevel(), undo ? entry.oldBiome : entry.newBiome);
+        if (!biome) throw std::runtime_error("unknown biome in history");
+        writeBiome(region, entry.pos, *biome);
+        return;
+    }
     if(index>=mEntries.size()) {
         auto& actor=mActors[index-mEntries.size()];
         mDiskPath.clear();
@@ -269,10 +292,16 @@ ChangeSet ChangeSet::splitTail(size_t from) {
         tail.mEntries.assign(mEntries.begin()+std::ptrdiff_t(from),mEntries.end());
         mEntries.resize(from);
         tail.mActors=std::move(mActors);
-    } else {
+        tail.mBiomes=std::move(mBiomes);
+    } else if (from < mEntries.size()+mActors.size()) {
         auto offset=from-mEntries.size();
         tail.mActors.assign(mActors.begin()+std::ptrdiff_t(offset),mActors.end());
         mActors.resize(offset);
+        tail.mBiomes=std::move(mBiomes);
+    } else {
+        auto offset = from-mEntries.size()-mActors.size();
+        tail.mBiomes.assign(mBiomes.begin()+std::ptrdiff_t(offset), mBiomes.end());
+        mBiomes.resize(offset);
     }
     return tail;
 }

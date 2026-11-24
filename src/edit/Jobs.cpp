@@ -1,4 +1,5 @@
 #include "edit/Jobs.h"
+#include "edit/Biome.h"
 
 #include "mod/Global.h"
 #include "session/PlayerSession.h"
@@ -26,6 +27,7 @@
 #include <chrono>
 #include <cmath>
 #include <random>
+#include <map>
 #include <utility>
 
 namespace creatorx::edit {
@@ -154,6 +156,77 @@ bool writePattern(std::optional<Mask> const& global, BlockSource& region, core::
     if(auto actor=region.getBlockEntity({p.x,p.y,p.z})) if(actor->save(entity,SaveContext{})) saved=&entity;
     return writeMasked(global,region,p,next,region.getExtraBlock({p.x,p.y,p.z}),saved,&changes,&old);
 }
+
+// 每个 tick 合并群系刷新；取消或加载失败前的已完成部分同样同步。
+class BiomeUpdates {
+public:
+    explicit BiomeUpdates(Level& level) : mLevel(level) {}
+    ~BiomeUpdates() {
+        for (auto const& [dimension, chunks] : mChunks) refreshBiomes(mLevel, dimension, chunks);
+    }
+    void add(int dimension, core::Vec3i p) {
+        auto& chunks = mChunks[dimension];
+        ChunkPos chunk{BlockPos{p.x, p.y, p.z}};
+        if (chunks.empty() || chunks.back() != chunk) chunks.push_back(chunk);
+    }
+private:
+    Level& mLevel;
+    std::map<int, std::vector<ChunkPos>> mChunks;
+};
+
+class BiomeEditJob final : public exec::Job {
+public:
+    BiomeEditJob(mce::UUID owner, int dimension, core::Box box, std::string biome)
+    : mOwner(owner), mDimension(dimension), mBox(std::move(box)), mIterator(mBox),
+      mBiome(std::move(biome)), mMask(globalMask(owner)), mChanges(dimension) {
+        mChanges.label = "setbiome";
+        mChunks.setNeighbors(maskNeighbors(mMask));
+    }
+    std::uint64_t total() const override { return mBox.volume(); }
+    std::uint64_t progress() const override { return mVisited; }
+    exec::JobState run(Level& level, exec::Budget const& budget) override {
+        auto* region = exec::regionOf(level, mDimension);
+        if (!region) { mError = tr("job.no_dimension"); return exec::JobState::failed; }
+        auto* biome = findBiome(level, mBiome);
+        if (!biome) { mError = tr("biome.unknown", mBiome); return exec::JobState::failed; }
+        BiomeUpdates updates(level);
+        mChunks.beginTick();
+        std::uint64_t used = 0;
+        while (!budget.exhausted(used)) {
+            auto current = mIterator.current();
+            if (!current) return exec::JobState::done;
+            auto p = *current;
+            if (mIterator.includes(p)) {
+                auto state = mChunks.prepare(level, *region, mOwner, p);
+                if (state == ChunkAccess::State::loading) return exec::JobState::running;
+                if (state == ChunkAccess::State::failed) { mError = chunkError(p); return exec::JobState::failed; }
+                if ((!mMask || mMask->test(region->getBlock({p.x,p.y,p.z}), *region, p))
+                    && writeBiome(*region, p, *biome, &mChanges)) {
+                    ++mChanged;
+                    updates.add(mDimension, p);
+                }
+            }
+            mIterator.advance();
+            ++mVisited;
+            ++used;
+        }
+        return exec::JobState::running;
+    }
+    void finish(Player* player, exec::JobEnd end) override {
+        finishEdit(mOwner, player, end, mChanges, mChanged, mError, mStart);
+    }
+private:
+    mce::UUID mOwner;
+    int mDimension;
+    core::Box mBox;
+    core::BoxIterator mIterator;
+    std::string mBiome;
+    std::optional<Mask> mMask;
+    ChangeSet mChanges;
+    ChunkAccess mChunks;
+    std::uint64_t mVisited = 0, mChanged = 0;
+    Clock::time_point mStart = Clock::now();
+};
 
 class RegionEditJob final : public exec::Job {
 public:
@@ -947,6 +1020,7 @@ public:
     std::uint64_t progress() const override { return mDone; }
 
     exec::JobState run(Level& level, exec::Budget const& budget) override {
+        BiomeUpdates updates(level);
         std::uint64_t used = 0;
         mChunks.beginTick();
         while (!budget.exhausted(used)) {
@@ -983,7 +1057,10 @@ public:
                 mError = chunkError(p);
                 return exec::JobState::failed;
             }
-            try {changes.apply(*region, index, mUndo);}
+            try {
+                changes.apply(*region, index, mUndo);
+                if (changes.isBiome(index)) updates.add(changes.dimension(), p);
+            }
             catch(std::exception const& error) {mError=tr("advanced.failed",error.what());return exec::JobState::failed;}
             ++mApplied;
             ++mDone;
@@ -1052,6 +1129,10 @@ private:
 };
 
 } // namespace
+
+std::unique_ptr<exec::Job> makeBiomeEdit(mce::UUID owner, int dimension, core::Box box, std::string biome) {
+    return std::make_unique<BiomeEditJob>(owner, dimension, std::move(box), std::move(biome));
+}
 
 std::unique_ptr<exec::Job> makeRegionEdit(
     mce::UUID           owner,

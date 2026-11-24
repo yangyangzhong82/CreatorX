@@ -470,7 +470,7 @@
     "help.reload": "/cx reload",
     "help.schem": "/cx schem 打开原理图管理。\n子命令：export <文件> [格式] [-e] | place <文件> [格式] [-a] [-e] | save/load/delete <文件> [格式] | list [关键词]",
     "help.help": "/cx help [command]",
-    "help.index": "CreatorX 命令：\nsel、chunk、gmask、wand、pos1、pos2、hpos1、hpos2、size、desel、togglewand、expand、contract、shift、outset、inset、set、replace、walls、faces、outline、hollow、overlay、center、move、stack、sphere、hsphere、cyl、hcyl、pyramid、hpyramid、count、distr、copy、cut、paste、rotate、flip、clearclipboard、undo、redo、history、clearhistory、cancel、menu、reload、schem、brush、tool、mask、mat、range、none、help\n使用 /cx help <命令> 查看语法。",
+    "help.index": "CreatorX 命令：\nsel、chunk、gmask、setbiome、wand、pos1、pos2、hpos1、hpos2、size、desel、togglewand、expand、contract、shift、outset、inset、set、replace、walls、faces、outline、hollow、overlay、center、move、stack、sphere、hsphere、cyl、hcyl、pyramid、hpyramid、count、distr、copy、cut、paste、rotate、flip、clearclipboard、undo、redo、history、clearhistory、cancel、menu、reload、schem、brush、tool、mask、mat、range、none、help\n使用 /cx help <命令> 查看语法。",
     "menu.adjust_selection": "平移 / 外扩 / 内缩选区",
     "menu.copy_options": "复制 / 剪切选项",
     "menu.copy_entities": "同时包含实体（生物、盔甲架、画等，不含玩家）",
@@ -490,5 +490,8 @@
     "help.masks": "\n>stone  <stone  #surface  %30  $plains  #tag:minecraft:logs\n/cx gmask <mask>  /cx gmask",
     "help.sel": "/cx sel <cuboid|poly|ellipsoid|sphere|cyl|convex>：切换并清空选区。poly/convex 用 pos1 开始，pos2 连续添加顶点。sphere/ellipsoid/cyl 用 pos1 定中心、pos2 定半径。",
     "help.chunk": "/cx chunk：选中脚下所在的完整区块，覆盖当前维度全部高度。",
-    "help.gmask": "/cx gmask [掩码]：设置与操作自身掩码取交集的全局写入掩码。省略参数或使用 off 清除。复制、统计与撤销/重做不受影响。"
+    "help.gmask": "/cx gmask [掩码]：设置与操作自身掩码取交集的全局写入掩码。省略参数或使用 off 清除。复制、统计与撤销/重做不受影响。",
+    "command.setbiome": "CreatorX：修改选区生物群系",
+    "biome.unknown": "未知生物群系：{}。请使用命令补全中的群系 ID。",
+    "help.setbiome": "/cx setbiome <生物群系ID>：修改选区内的群系，例如 /cx setbiome plains。支持非长方体选区、全局掩码及 undo/redo。"
 }

@@ -14,6 +14,8 @@
 
 namespace creatorx::edit {
 
+std::unique_ptr<exec::Job> makeBiomeEdit(mce::UUID owner, int dimension, core::Box box, std::string biome);
+
 // set / replace / walls / faces：遍历包围盒，用图案写入通过掩码的方块。
 std::unique_ptr<exec::Job> makeRegionEdit(
     mce::UUID           owner,

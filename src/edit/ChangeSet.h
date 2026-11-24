@@ -23,9 +23,9 @@ public:
     explicit ChangeSet(int dimension);
 
     int    dimension() const { return mDimension; }
-    size_t size() const { return mDiskPath.empty() ? mEntries.size()+mActors.size() : mStoredSize; }
+    size_t size() const { return mDiskPath.empty() ? residentSize() : mStoredSize; }
     bool   empty() const { return size() == 0; }
-    size_t residentSize() const { return mEntries.size()+mActors.size(); }
+    size_t residentSize() const { return mEntries.size()+mActors.size()+mBiomes.size(); }
     bool trySpill();
     void ensureLoaded();
     void persist();
@@ -47,11 +47,17 @@ public:
         CompoundTag const*           newEntity
     );
     void recordActor(core::Vec3i pos, std::int64_t id, CompoundTag tag, bool added);
+    void recordBiome(core::Vec3i pos, std::string oldBiome, std::string newBiome);
+    bool isBiome(size_t index) const { return index >= mEntries.size()+mActors.size(); }
 
     // 把第 index 条改动写回世界：undo 为 true 时写旧值，否则写新值。
     void apply(BlockSource& region, size_t index, bool undo);
 
-    core::Vec3i position(size_t index) const { return index<mEntries.size() ? mEntries[index].pos : mActors[index-mEntries.size()].pos; }
+    core::Vec3i position(size_t index) const {
+        if (index < mEntries.size()) return mEntries[index].pos;
+        index -= mEntries.size();
+        return index < mActors.size() ? mActors[index].pos : mBiomes[index-mActors.size()].pos;
+    }
 
     // 截下 [from, size) 作为新的 ChangeSet 返回，本对象保留 [0, from)。
     ChangeSet splitTail(size_t from);
@@ -81,6 +87,11 @@ private:
         std::shared_ptr<CompoundTag const> tag;
     };
     std::vector<ActorEntry> mActors;
+    struct BiomeEntry {
+        core::Vec3i pos;
+        std::string oldBiome, newBiome;
+    };
+    std::vector<BiomeEntry> mBiomes;
     std::filesystem::path mDiskPath;
     size_t mStoredSize = 0;
     std::shared_future<void> mWrite;

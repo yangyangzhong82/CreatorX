@@ -2,6 +2,7 @@
 
 #include "command/SelectionCommands.h"
 #include "edit/Jobs.h"
+#include "edit/Biome.h"
 #include "edit/Pattern.h"
 #include "Config/ConfigManager.h"
 #include "visual/PastePreview.h"
@@ -34,6 +35,9 @@ namespace creatorx {
 
 enum class CreatorXBlockId {};
 using BlockId = ll::command::SoftEnum<CreatorXBlockId>;
+enum class CreatorXBiomeId {};
+using BiomeId = ll::command::SoftEnum<CreatorXBiomeId>;
+struct BiomeParams { BiomeId biome; };
 
 struct BlockParams {
     BlockId block;
@@ -82,7 +86,8 @@ struct SimpleEditParams {
 
 namespace {
 
-constexpr std::array<std::string_view, 15> commandNames{
+constexpr std::array<std::string_view, 16> commandNames{
+    "setbiome",
     "gmask",
     "set",
     "replace",
@@ -229,6 +234,25 @@ void registerEditCommand(ll::command::CommandHandle& handle, std::string_view na
     using Origin = CommandOrigin const&;
     using Output = CommandOutput&;
 
+    if (name == "setbiome") {
+        subOverload<BiomeParams>(handle, name, subcommand).required("biome")
+            .execute([](Origin origin, Output output, BiomeParams const& args) {
+                auto* player = getCommandPlayer(origin, output);
+                if (!player) return;
+                auto* selection = completeSelection(*player, output);
+                if (!selection) return;
+                std::string biome = args.biome;
+                if (!edit::findBiome(player->getLevel(), biome)) {
+                    output.error(tr("biome.unknown", biome));
+                    return;
+                }
+                auto box = *selection->box();
+                auto job = edit::makeBiomeEdit(player->getUuid(), player->getDimensionId(), box, std::move(biome));
+                startJob(*player, output, std::move(job), box.volume());
+            });
+        return;
+    }
+
     if(name=="gmask") {
         subOverload<OptionalPatternParams>(handle,name,subcommand).optional("pattern").execute([](Origin origin,Output output,OptionalPatternParams const& args) {
             auto* player=getCommandPlayer(origin,output);
@@ -369,6 +393,13 @@ void registerCommands(CommandRegistry& registry) {
     constexpr auto enumName = ll::command::enum_name_v<BlockId>;
     if (registrar.hasSoftEnum(enumName)) registrar.setSoftEnumValues(enumName, std::move(blockIds));
     else registrar.tryRegisterSoftEnum(enumName, std::move(blockIds));
+
+    if (auto level = ll::service::getLevel()) {
+        auto biomes = edit::registeredBiomeIds(*level);
+        constexpr auto biomeEnum = ll::command::enum_name_v<BiomeId>;
+        if (registrar.hasSoftEnum(biomeEnum)) registrar.setSoftEnumValues(biomeEnum, std::move(biomes));
+        else registrar.tryRegisterSoftEnum(biomeEnum, std::move(biomes));
+    }
 
     auto& cx = registrar.getOrCreateCommand("cx", std::string(tr("command.cx")), CommandPermissionLevel::GameDirectors);
     // 共用一个重载，减少进入存档时原版解析器注册的规则。
