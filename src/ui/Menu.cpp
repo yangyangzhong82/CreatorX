@@ -115,8 +115,10 @@ std::string selectionSummary(Player& player) {
         auto const& known = cuboid.first ? *cuboid.first : *cuboid.second;
         return tr("menu.selection_partial", cuboid.first ? 1 : 2, known.x, known.y, known.z, cuboid.first ? 2 : 1);
     }
-    auto a    = *cuboid.first;
-    auto b    = *cuboid.second;
+    if(!cuboid.complete()) return std::string(tr("selection.need_vertices"));
+    auto bounds=*cuboid.box();
+    auto a    = bounds.min;
+    auto b    = bounds.max;
     auto size = *cuboid.size();
     return tr("menu.selection_info", a.x, a.y, a.z, b.x, b.y, b.z, size.x, size.y, size.z, size.volume());
 }

@@ -417,7 +417,7 @@ void applyBrush(Player& player, Feedback const& output, BrushBinding const& bind
     auto filter = [binding, target](BlockSource& region, core::Vec3i p) {
         auto offset = p - target;
         if (!insideShape(binding, offset)) return false;
-        if (binding.mask && !binding.mask->test(region.getBlock({p.x, p.y, p.z}))) return false;
+        if (binding.mask && !binding.mask->test(region.getBlock({p.x, p.y, p.z}),region,p)) return false;
         if (!binding.hollow) return true;
         constexpr core::Vec3i neighbors[]{
             {1,  0,  0 },
@@ -438,7 +438,8 @@ void applyBrush(Player& player, Feedback const& output, BrushBinding const& bind
         box,
         *binding.pattern,
         std::move(filter),
-        cylinder ? "brush cyl" : "brush sphere"
+        cylinder ? "brush cyl" : "brush sphere",
+        binding.mask && binding.mask->needsNeighbors()
     );
     submitEditJob(player, output, std::move(job), estimate);
 }

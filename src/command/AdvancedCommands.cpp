@@ -314,7 +314,11 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
             player.getUuid(), player.getDimensionId(), source, offset, copies, move, skipAir, std::move(mask), includeEntities
         );
         std::function<void(Player&)> follow;
-        if(select) follow=[destination](Player& target) {selectBox(target,destination);};
+        if(select) {
+            auto selected=*selection;
+            selected.shift(delta);
+            follow=[selected=std::move(selected)](Player& target) {selectRegion(target,selected);};
+        }
         submitEditJob(player,output,std::move(job),changed,std::move(follow));
         return;
     }
@@ -347,6 +351,7 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
     edit::EditFilter filter;
     std::string_view patternText;
     std::string_view maskText;
+    bool neighbors=false;
     if (name == "hollow" || name == "overlay" || name == "center") {
         auto selection = completeSelection(player, output);
         if (!selection) return;
@@ -356,6 +361,11 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
             int thickness=hasThickness ? integer(tokens[0]) : 1;
             patternText=hasThickness ? (tokens.size()>1 ? raw.substr(tokens[1].data()-raw.data()) : std::string_view("air")) : (tokens.empty() ? std::string_view("air") : raw);
             filter = [box, thickness](BlockSource&, core::Vec3i p) {
+                if(box.region) {
+                    for(int n=1;n<=thickness;++n) for(auto offset:{core::Vec3i{n,0,0},core::Vec3i{-n,0,0},core::Vec3i{0,n,0},core::Vec3i{0,-n,0},core::Vec3i{0,0,n},core::Vec3i{0,0,-n}})
+                        if(!box.contains(p+offset)) return false;
+                    return true;
+                }
                 return p.x >= box.min.x + thickness && p.x <= box.max.x - thickness
                     && p.y >= box.min.y + thickness && p.y <= box.max.y - thickness
                     && p.z >= box.min.z + thickness && p.z <= box.max.z - thickness;
@@ -369,12 +379,13 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
             patternText = raw;
             auto original = box;
             ++box.max.y;
+            if(original.region) box.region=[original](core::Vec3i p) {return original.contains(p) || original.contains(p-core::Vec3i{0,1,0});};
             auto heights = std::make_shared<std::map<std::pair<int,int>, int>>();
             filter = [original, heights](BlockSource& region, core::Vec3i p) {
                 auto key = std::pair{p.x, p.z};
                 auto [it, inserted] = heights->try_emplace(key, original.min.y - 2);
                 if (inserted) for (int y = original.max.y; y >= original.min.y; --y) {
-                    if (region.getBlock({p.x, y, p.z})._isSolid()) { it->second = y; break; }
+                    if (original.contains({p.x,y,p.z}) && region.getBlock({p.x, y, p.z})._isSolid()) { it->second = y; break; }
                 }
                 return p.y == it->second + 1;
             };
@@ -457,11 +468,12 @@ void execute(Player& player, Feedback const& output, std::string_view name, std:
     if (!maskText.empty()) {
         auto mask = edit::Mask::parse(maskText, player, error);
         if (!mask) throw std::runtime_error(error);
+        neighbors=mask->needsNeighbors();
         filter = [shape = std::move(filter), mask = std::move(*mask)](BlockSource& region, core::Vec3i p) {
-            return shape(region, p) && mask.test(region.getBlock({p.x, p.y, p.z}));
+            return shape(region, p) && mask.test(region.getBlock({p.x, p.y, p.z}),region,p);
         };
     }
-    auto job = edit::makeComputedEdit(player.getUuid(), player.getDimensionId(), box, std::move(*pattern), std::move(filter), std::string(name));
+    auto job = edit::makeComputedEdit(player.getUuid(), player.getDimensionId(), box, std::move(*pattern), std::move(filter), std::string(name),neighbors);
     submitEditJob(player, output, std::move(job), box.volume(), [pattern = std::string(patternText), mask = std::string(maskText)](Player& target) {
         if (pattern != "hand" && pattern != "offhand") rememberRecent(getSession(target).recentPatterns, pattern);
         if (!mask.empty()) rememberRecent(getSession(target).recentMasks, mask);

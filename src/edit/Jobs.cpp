@@ -45,38 +45,46 @@ public:
     enum class State { ready, loading, failed };
 
     void beginTick() { mReady.reset(); }
+    void setNeighbors(bool enabled) { mNeighbors=enabled; }
 
     State prepare(Level& level, BlockSource& region, mce::UUID const& owner, core::Vec3i p) {
         auto chunk = ChunkPos(BlockPos{p.x, p.y, p.z});
         if (mReady == chunk) return State::ready;
         if (mRequested != chunk) {
             mView.reset();
-            mDeferredChunk.reset();
+            mDeferredChunks.clear();
             mRequested.reset();
         }
 
         auto& source = region.getChunkSource();
-        if (source.getAvailableChunk(chunk)) {
+        if (!source.isWithinWorldLimit(chunk)) return State::failed;
+        std::vector<ChunkPos> missing;
+        int radius=mNeighbors ? 1 : 0;
+        for(int z=-radius;z<=radius;++z) for(int x=-radius;x<=radius;++x) {
+            auto neighbor=chunk;
+            neighbor.x+=x;neighbor.z+=z;
+            if(source.isWithinWorldLimit(neighbor) && !source.getAvailableChunk(neighbor)) missing.push_back(neighbor);
+        }
+        if (missing.empty()) {
             mReady = chunk;
             return State::ready;
         }
         if (mRequested) return Clock::now() < mDeadline ? State::loading : State::failed;
-        if (!source.isWithinWorldLimit(chunk)) return State::failed;
 
         if (auto* player = level.getPlayer(owner)) mView = player->$_createChunkSource(source);
         if (mView) {
             auto x = chunk.x * 16;
             auto z = chunk.z * 16;
             mView->move(
-                BlockPos{x, p.y, z},
-                BlockPos{x + 15, p.y, z + 15},
+                BlockPos{x-radius*16, p.y, z-radius*16},
+                BlockPos{x+15+radius*16, p.y, z+15+radius*16},
                 false,
                 ChunkSourceViewGenerateMode::GenerateAll,
                 [](auto) {},
                 nullptr
             );
         } else {
-            mDeferredChunk = source.getOrLoadChunk(chunk, ChunkSource::LoadMode::Deferred, false);
+            for(auto const& neighbor:missing) mDeferredChunks.push_back(source.getOrLoadChunk(neighbor, ChunkSource::LoadMode::Deferred, false));
         }
         mRequested = chunk;
         mDeadline  = Clock::now() + std::chrono::seconds(30);
@@ -87,7 +95,8 @@ private:
     std::optional<ChunkPos>          mReady;
     std::optional<ChunkPos>          mRequested;
     std::shared_ptr<ChunkViewSource> mView;
-    std::shared_ptr<LevelChunk>      mDeferredChunk;
+    std::vector<std::shared_ptr<LevelChunk>> mDeferredChunks;
+    bool mNeighbors=false;
     Clock::time_point                mDeadline{};
 };
 
@@ -119,6 +128,33 @@ void finishEdit(
     }
 }
 
+// 在任务创建时捕获全局掩码，撤销和复制读取不受它影响。
+std::optional<Mask> globalMask(mce::UUID const& owner) {
+    auto session=findSession(owner);
+    return session ? session->globalMask : std::nullopt;
+}
+
+bool maskNeighbors(std::optional<Mask> const& mask) { return mask && mask->needsNeighbors(); }
+
+template<class... Args>
+bool writeMasked(std::optional<Mask> const& mask, BlockSource& region, core::Vec3i p, Args&&... args) {
+    return (!mask || mask->test(region.getBlock({p.x,p.y,p.z}),region,p))
+        && writeBlock(region,p,std::forward<Args>(args)...);
+}
+
+bool writePattern(std::optional<Mask> const& global, BlockSource& region, core::Vec3i p,
+                  Pattern const& pattern, core::Box const& bounds, std::mt19937& random, ChangeSet& changes) {
+    auto const& old=region.getBlock({p.x,p.y,p.z});
+    bool preserveData=false,skip=false;
+    auto const& next=pattern.apply(random,p,bounds,old,&preserveData,&skip);
+    if(skip) return false;
+    if(!preserveData) return writeMasked(global,region,p,next,airBlock(),nullptr,&changes,&old);
+    CompoundTag entity;
+    CompoundTag const* saved=nullptr;
+    if(auto actor=region.getBlockEntity({p.x,p.y,p.z})) if(actor->save(entity,SaveContext{})) saved=&entity;
+    return writeMasked(global,region,p,next,region.getExtraBlock({p.x,p.y,p.z}),saved,&changes,&old);
+}
+
 class RegionEditJob final : public exec::Job {
 public:
     RegionEditJob(
@@ -130,13 +166,14 @@ public:
         std::optional<Mask> mask,
         std::vector<CompoundTag> removedActors
     )
-    : mOwner(owner),
+    : mGlobalMask(globalMask(owner)), mOwner(owner),
       mDimension(dimension),
       mTotal(core::shapeVolume(box, shape)),
+      mBox(box),
       mPattern(std::move(pattern)),
       mMask(std::move(mask)),
       mIterator(box, shape),
-      mChanges(dimension), mRemovedActors(std::move(removedActors)) { mChanges.label = shape == core::BoxShape::all ? "set/replace" : shape == core::BoxShape::walls ? "walls" : "faces"; }
+      mChanges(dimension), mRemovedActors(std::move(removedActors)) { mChunks.setNeighbors(maskNeighbors(mMask)||maskNeighbors(mGlobalMask)); mChanges.label = shape == core::BoxShape::all ? "set/replace" : shape == core::BoxShape::walls ? "walls" : "faces"; }
 
     std::uint64_t total() const override { return mTotal; }
     std::uint64_t progress() const override { return mVisited; }
@@ -165,6 +202,7 @@ public:
                 continue;
             }
             auto p = *current;
+            if(!mIterator.includes(p)) {mIterator.advance();++mVisited;++used;continue;}
             auto state = mChunks.prepare(level, *region, mOwner, p);
             if (state == ChunkAccess::State::loading) return exec::JobState::running;
             if (state == ChunkAccess::State::failed) {
@@ -172,8 +210,8 @@ public:
                 return exec::JobState::failed;
             }
             auto const& oldBlock = region->getBlock(BlockPos{p.x, p.y, p.z});
-            if (!mMask || mMask->test(oldBlock)) {
-                if (writeBlock(*region, p, mPattern.apply(mRandom), airBlock(), nullptr, &mChanges, &oldBlock)) ++mChanged;
+            if (!mMask || mMask->test(oldBlock,*region,p)) {
+                if (writePattern(mGlobalMask,*region,p,mPattern,mBox,mRandom,mChanges)) ++mChanged;
             }
             mIterator.advance();
             ++mVisited;
@@ -187,9 +225,11 @@ public:
     }
 
 private:
+    std::optional<Mask> mGlobalMask;
     mce::UUID           mOwner;
     int                 mDimension;
     std::uint64_t       mTotal;
+    core::Box           mBox;
     Pattern             mPattern;
     std::optional<Mask> mMask;
     core::BoxIterator   mIterator;
@@ -204,8 +244,8 @@ private:
 
 class ComputedJob final : public exec::Job {
 public:
-    ComputedJob(mce::UUID owner, int dimension, core::Box box, Pattern pattern, EditFilter filter, std::string label)
-    : mOwner(owner), mDimension(dimension), mBox(box), mIterator(box), mPattern(std::move(pattern)), mFilter(std::move(filter)), mChanges(dimension) { mChanges.label = std::move(label); }
+    ComputedJob(mce::UUID owner, int dimension, core::Box box, Pattern pattern, EditFilter filter, std::string label, bool neighbors)
+    : mGlobalMask(globalMask(owner)), mOwner(owner), mDimension(dimension), mBox(box), mIterator(box), mPattern(std::move(pattern)), mFilter(std::move(filter)), mChanges(dimension) { mChunks.setNeighbors(neighbors||maskNeighbors(mGlobalMask)); mChanges.label = std::move(label); }
     std::uint64_t total() const override { return mBox.volume(); }
     std::uint64_t progress() const override { return mVisited; }
     exec::JobState run(Level& level, exec::Budget const& budget) override {
@@ -217,16 +257,18 @@ public:
             auto current = mIterator.current();
             if (!current) return exec::JobState::done;
             auto p = *current;
+            if(!mIterator.includes(p)) {mIterator.advance();++mVisited;++used;continue;}
             auto state = mChunks.prepare(level, *region, mOwner, p);
             if (state == ChunkAccess::State::loading) return exec::JobState::running;
             if (state == ChunkAccess::State::failed) { mError = chunkError(p); return exec::JobState::failed; }
-            if (mFilter(*region, p) && writeBlock(*region, p, mPattern.apply(mRandom), airBlock(), nullptr, &mChanges)) ++mChanged;
+            if (mFilter(*region, p) && writePattern(mGlobalMask,*region,p,mPattern,mBox,mRandom,mChanges)) ++mChanged;
             mIterator.advance(); ++mVisited; ++used;
         }
         return exec::JobState::running;
     }
     void finish(Player* player, exec::JobEnd end) override { finishEdit(mOwner, player, end, mChanges, mChanged, mError, mStart); }
 private:
+    std::optional<Mask> mGlobalMask;
     mce::UUID mOwner;
     int mDimension;
     core::Box mBox;
@@ -246,9 +288,10 @@ public:
         mce::UUID owner, int dimension, core::Vec3i center, core::Box box, int radius, int iterations,
         std::optional<Mask> mask
     )
-    : mOwner(owner), mDimension(dimension), mCenter(center), mBox(box), mWidth(box.size().x),
+    : mGlobalMask(globalMask(owner)), mOwner(owner), mDimension(dimension), mCenter(center), mBox(box), mWidth(box.size().x),
       mColumns(mWidth * box.size().z), mRadius(radius), mIterations(iterations), mMask(std::move(mask)),
       mChanges(dimension), mHeights(iterations ? mColumns : 0), mSurface(mHeights), mNext(mHeights) {
+        mChunks.setNeighbors(maskNeighbors(mMask)||maskNeighbors(mGlobalMask));
         mChanges.label = iterations ? "brush smooth" : "brush gravity";
     }
 
@@ -306,7 +349,7 @@ public:
     }
 
 private:
-    bool matches(Block const& block) const { return !mMask || mMask->test(block); }
+    bool matches(Block const& block, BlockSource& region, core::Vec3i p) const { return !mMask || mMask->test(block,region,p); }
 
     static bool terrainBlock(BlockSource& region, BlockPos const& pos, Block const& block) {
         if (!block._isSolid() || isDisallowed(block)
@@ -355,15 +398,15 @@ private:
             for (++p.y; p.y <= target; ++p.y) {
                 BlockPos pos{p.x, p.y, p.z};
                 auto const& block = region.getBlock(pos);
-                if (!block.isAir() || !region.getExtraBlock(pos).isAir() || !matches(block)) break;
-                if (writeBlock(region, p, top, airBlock(), nullptr, &mChanges)) ++mChanged;
+                if (!block.isAir() || !region.getExtraBlock(pos).isAir() || !matches(block,region,p)) break;
+                if (writeMasked(mGlobalMask, region, p, top, airBlock(), nullptr, &mChanges)) ++mChanged;
             }
         } else {
             for (; p.y > target; --p.y) {
                 BlockPos pos{p.x, p.y, p.z};
                 auto const& block = region.getBlock(pos);
-                if (!terrainBlock(region, pos, block) || !matches(block)) break;
-                if (writeBlock(region, p, airBlock(), airBlock(), nullptr, &mChanges)) ++mChanged;
+                if (!terrainBlock(region, pos, block) || !matches(block,region,p)) break;
+                if (writeMasked(mGlobalMask, region, p, airBlock(), airBlock(), nullptr, &mChanges)) ++mChanged;
             }
         }
     }
@@ -378,7 +421,7 @@ private:
             auto const& block = region.getBlock(pos);
             mColumnBlocks[i] = &block;
             if (block.isAir() && region.getExtraBlock(pos).isAir()) continue;
-            if (pos.y >= mBox.min.y && landing < i && matches(block) && terrainBlock(region, pos, block)) {
+            if (pos.y >= mBox.min.y && landing < i && matches(block,region,{pos.x,pos.y,pos.z}) && terrainBlock(region, pos, block)) {
                 mColumnBlocks[landing++] = &block;
                 mColumnBlocks[i] = &airBlock();
             } else {
@@ -388,13 +431,14 @@ private:
         for (int i = 0; i < height; ++i) {
             p.y = minY + i;
             auto const& old = region.getBlock({p.x, p.y, p.z});
-            if (&old != mColumnBlocks[i] && writeBlock(region, p, *mColumnBlocks[i], airBlock(), nullptr, &mChanges, &old)) {
+            if (&old != mColumnBlocks[i] && writeMasked(mGlobalMask, region, p, *mColumnBlocks[i], airBlock(), nullptr, &mChanges, &old)) {
                 ++mChanged;
             }
         }
         return height * 2;
     }
 
+    std::optional<Mask> mGlobalMask;
     mce::UUID           mOwner;
     int                 mDimension;
     core::Vec3i         mCenter;
@@ -413,7 +457,7 @@ private:
 class InspectJob final : public exec::Job {
 public:
     InspectJob(mce::UUID owner, int dimension, core::Box box, std::optional<Mask> mask)
-    : mOwner(owner), mDimension(dimension), mBox(box), mIterator(box), mMask(std::move(mask)) {}
+    : mOwner(owner), mDimension(dimension), mBox(box), mIterator(box), mMask(std::move(mask)) {mChunks.setNeighbors(maskNeighbors(mMask));}
     InspectJob(mce::UUID owner,std::shared_ptr<Clipboard const> clipboard)
     : InspectJob(owner,0,{{0,0,0},clipboard->size-core::Vec3i{1,1,1}},std::nullopt) {mClipboard=std::move(clipboard);}
     std::uint64_t total() const override { return mBox.volume(); }
@@ -427,6 +471,7 @@ public:
             auto current = mIterator.current();
             if (!current) return exec::JobState::done;
             auto p = *current;
+            if(!mIterator.includes(p)) {mIterator.advance();++mVisited;++used;continue;}
             Block const* block=nullptr;
             if(mClipboard) block=mClipboard->at(mClipboard->index(p)).block;
             else {
@@ -435,7 +480,7 @@ public:
                 if (state == ChunkAccess::State::failed) { mError = chunkError(p); return exec::JobState::failed; }
                 block=&region->getBlock({p.x,p.y,p.z});
             }
-            if (block && (!mMask || mMask->test(*block))) { ++mMatched; ++mCounts[block->getTypeName()]; }
+            if (block && (!mMask || mMask->test(*block,*region,p))) { ++mMatched; ++mCounts[block->getTypeName()]; }
             mIterator.advance(); ++mVisited; ++used;
         }
         return exec::JobState::running;
@@ -474,8 +519,9 @@ public:
         mce::UUID owner, int dimension, core::Box source, core::Vec3i offset, int copies,
         bool move, bool skipAir, std::optional<Mask> mask, bool includeEntities
     )
-    : mOwner(owner), mDimension(dimension), mSource(source), mOffset(offset), mCopies(copies), mMove(move), mSkipAir(skipAir),
+    : mGlobalMask(globalMask(owner)), mOwner(owner), mDimension(dimension), mSource(source), mOffset(offset), mCopies(copies), mMove(move), mSkipAir(skipAir),
       mMask(std::move(mask)), mIncludeEntities(includeEntities), mIterator(source), mChanges(dimension) {
+        mChunks.setNeighbors(maskNeighbors(mMask)||maskNeighbors(mGlobalMask));
         mData.size = source.size();
         mChanges.label = move ? "move" : "stack";
     }
@@ -517,6 +563,7 @@ public:
                 continue;
             }
             auto source = *current;
+            if(!mIterator.includes(source)) {advance(used);continue;}
             auto index = mData.index(source - mSource.min);
             auto target = mStage == Stage::paste ? source + copyOffset() : source;
             Block const* block = nullptr;
@@ -548,7 +595,7 @@ public:
                 if (mIncludeEntities) captureActors(*region, source);
                 if (!captureBlock(*region, source, index)) return exec::JobState::failed;
             } else {
-                if (writeBlock(*region, target, *block, *extra, tag, &mChanges)) ++mChanged;
+                if (writeMasked(mGlobalMask, *region, target, *block, *extra, tag, &mChanges)) ++mChanged;
             }
             advance(used);
         }
@@ -575,7 +622,7 @@ private:
     bool captureBlock(BlockSource& region, core::Vec3i source, size_t index) {
         BlockPos pos{source.x, source.y, source.z};
         auto const& block = region.getBlock(pos);
-        if ((mSkipAir && block.isAir()) || (mMask && !mMask->test(block))) {
+        if ((mSkipAir && block.isAir()) || (mMask && !mMask->test(block,region,source))) {
             mData.store(index, {nullptr, nullptr});
             return true;
         }
@@ -654,6 +701,7 @@ private:
         return exec::JobState::done;
     }
 
+    std::optional<Mask> mGlobalMask;
     mce::UUID mOwner;
     int mDimension;
     core::Box mSource;
@@ -687,6 +735,7 @@ public:
       mCutPattern(std::move(cutPattern)),
       mClipboard(std::make_shared<Clipboard>()), mMask(std::move(mask)), mIncludeEntities(includeEntities),
       mDestination(std::move(destination)) {
+        mChunks.setNeighbors(maskNeighbors(mMask));
         mClipboard->size   = box.size();
         mClipboard->offset = offset;
         mClipboard->origin = box.min;
@@ -708,6 +757,7 @@ public:
             auto* current = mIterator.current();
             if (!current) return exec::JobState::done;
             auto p     = *current;
+            if(!mIterator.includes(p)) {mIterator.advance();++mRead;++used;continue;}
             auto state = mChunks.prepare(level, *region, mOwner, p);
             if (state == ChunkAccess::State::loading) return exec::JobState::running;
             if (state == ChunkAccess::State::failed) {
@@ -725,6 +775,7 @@ public:
                     CompoundTag tag;
                     if(!actor->save(tag)) continue;
                     auto pos=actor->getPosition();
+                    if(!mBox.contains({int(std::floor(pos.x)),int(std::floor(pos.y)),int(std::floor(pos.z))})) continue;
                     CompoundTag value;
                     value["pos"]=storage::Nbt::array({double(pos.x-mBox.min.x),double(pos.y-mBox.min.y),double(pos.z-mBox.min.z)});
                     value["blockPos"]=storage::vector({int(std::floor(pos.x))-mBox.min.x,int(std::floor(pos.y))-mBox.min.y,int(std::floor(pos.z))-mBox.min.z});
@@ -736,7 +787,7 @@ public:
             BlockPos    pos{p.x, p.y, p.z};
             auto        index        = mClipboard->index(p - mBox.min);
             auto const& block        = region->getBlock(pos);
-            if(mMask && !mMask->test(block)) {mClipboard->store(index,{nullptr,nullptr});continue;}
+            if(mMask && !mMask->test(block,*region,p)) {mClipboard->store(index,{nullptr,nullptr});continue;}
             mClipboard->store(index, {&block, &region->getExtraBlock(pos)});
             if (block.getBlockType().mBlockEntityType == BlockActorType::Undefined) continue;
             if (auto* actor = region->getBlockEntity(pos)) {
@@ -789,13 +840,14 @@ private:
 class PasteJob final : public exec::Job {
 public:
     PasteJob(mce::UUID owner, int dimension, std::shared_ptr<Clipboard const> clipboard, core::Vec3i min, bool skipAir, std::optional<Mask> mask, bool includeEntities, bool maskTarget)
-    : mOwner(owner),
+    : mGlobalMask(globalMask(owner)), mOwner(owner),
       mDimension(dimension),
       mClipboard(std::move(clipboard)),
       mBox{min, min + mClipboard->size - core::Vec3i{1, 1, 1}},
       mSkipAir(skipAir),
       mIterator(mBox),
       mChanges(dimension), mMask(std::move(mask)), mIncludeEntities(includeEntities), mMaskTarget(maskTarget) {
+        mChunks.setNeighbors(maskNeighbors(mMask)||maskNeighbors(mGlobalMask));
         mChanges.label = maskTarget ? "brush clipboard" : "paste";
     }
 
@@ -836,7 +888,7 @@ public:
             auto  p     = *current;
             auto  index = mClipboard->index(p - mBox.min);
             auto [block, extra] = mClipboard->at(index);
-            if (block && (!mSkipAir || !block->isAir()) && (mMaskTarget || !mMask || mMask->test(*block))) {
+            if (block && (!mSkipAir || !block->isAir())) {
                 ++used;
                 if (isDisallowed(*block)) {
                     ++mDenied;
@@ -849,8 +901,8 @@ public:
                     }
                     auto               entity = mClipboard->entities.find(index);
                     CompoundTag const* tag    = entity == mClipboard->entities.end() ? nullptr : &entity->second;
-                    if ((!mMaskTarget || !mMask || mMask->test(region->getBlock({p.x, p.y, p.z})))
-                        && writeBlock(*region, p, *block, extra ? *extra : airBlock(), tag, &mChanges)) ++mChanged;
+                    if ((!mMask || mMask->test(mMaskTarget ? region->getBlock({p.x,p.y,p.z}) : *block,*region,p))
+                        && writeMasked(mGlobalMask, *region, p, *block, extra ? *extra : airBlock(), tag, &mChanges)) ++mChanged;
                 }
             }
             mIterator.advance();
@@ -865,6 +917,7 @@ public:
     }
 
 private:
+    std::optional<Mask> mGlobalMask;
     mce::UUID                        mOwner;
     int                              mDimension;
     std::shared_ptr<Clipboard const> mClipboard;
@@ -1035,8 +1088,8 @@ std::unique_ptr<exec::Job> makeHistory(mce::UUID owner, bool undo, std::vector<C
     return std::make_unique<HistoryJob>(owner, undo, std::move(sets),requester);
 }
 
-std::unique_ptr<exec::Job> makeComputedEdit(mce::UUID owner, int dimension, core::Box box, Pattern pattern, EditFilter filter, std::string label) {
-    return std::make_unique<ComputedJob>(owner, dimension, box, std::move(pattern), std::move(filter), std::move(label));
+std::unique_ptr<exec::Job> makeComputedEdit(mce::UUID owner, int dimension, core::Box box, Pattern pattern, EditFilter filter, std::string label, bool neighbors) {
+    return std::make_unique<ComputedJob>(owner, dimension, box, std::move(pattern), std::move(filter), std::move(label),neighbors);
 }
 std::unique_ptr<exec::Job> makeInspect(mce::UUID owner, int dimension, core::Box box, std::optional<Mask> mask) {
     return std::make_unique<InspectJob>(owner, dimension, box, std::move(mask));

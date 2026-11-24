@@ -44,6 +44,8 @@ struct PlayerSession {
     std::chrono::steady_clock::time_point  lastMenuOpen{};
     std::shared_ptr<edit::Clipboard const> clipboard;
     edit::History                          history;
+    std::optional<edit::Mask>               globalMask;
+    std::string                             globalMaskText;
     std::deque<std::string>                recentPatterns; // 最近使用的图案，最新的在前
     std::deque<std::string>                recentMasks;
     std::unordered_map<std::string, BrushBinding> brushBindings;

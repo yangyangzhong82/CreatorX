@@ -1,6 +1,10 @@
 #include "edit/Pattern.h"
 
 #include "mod/Global.h"
+#include "edit/Clipboard.h"
+#include "session/PlayerSession.h"
+#include "mc/world/level/BlockSource.h"
+#include "mc/world/level/biome/Biome.h"
 
 #include "mc/deps/core/string/HashedString.h"
 #include "mc/world/actor/player/Player.h"
@@ -214,11 +218,54 @@ std::vector<std::string_view> splitTokens(std::string_view text) {
 }
 
 std::optional<Pattern> Pattern::parse(std::string_view text, Player const& player, std::string& error) {
+    text=trim(text);
+    if(text == "#clipboard") {
+        auto session=findSession(player.getUuid());
+        if(!session || !session->clipboard) { error=tr("clipboard.empty"); return std::nullopt; }
+        Pattern result;
+        result.mClipboard=session->clipboard;
+        if(!result.isAllowed()) { error=tr("pattern.clipboard_denied"); return std::nullopt; }
+        return result;
+    }
+    if(text.starts_with("#[")) { error=tr("pattern.bad_syntax",text); return std::nullopt; }
+    if(text.starts_with("#gradient[") && text.ends_with(']') && splitTopLevel(text,[](char c){return c==',';}).size()==1) {
+        auto body=text.substr(10,text.size()-11);
+        Pattern result;
+        if(body.size()>1 && body[1]=='|') {
+            auto axis=std::string_view("xyz").find(body[0]);
+            if(axis==std::string_view::npos) { error=tr("pattern.bad_syntax",text); return std::nullopt; }
+            result.mAxis=int(axis);
+            body.remove_prefix(2);
+        }
+        for(auto entry:splitTopLevel(body,[](char c){return c==',';})) {
+            auto child=parse(entry,player,error);
+            if(!child) return std::nullopt;
+            result.mChildren.push_back(std::move(*child));
+        }
+        return result;
+    }
+    if(text.starts_with("^[") && text.ends_with(']') && splitTopLevel(text,[](char c){return c==',';}).size()==1) {
+        auto states=parseStates(text.substr(2,text.size()-3));
+        if(!states || states->empty()) { error=tr("pattern.bad_syntax",text); return std::nullopt; }
+        Pattern result;
+        result.mModify=[states=std::move(*states)](Block const& current) -> Block const& {
+            auto tag=*current.mSerializationId;
+            if(!tag.contains("states")) return current;
+            auto& target=tag["states"].get<CompoundTag>();
+            for(auto const& [key,value]:states) {
+                if(!target.contains(key)) return current;
+                std::visit([&](auto const& item){target[key]=item;},value);
+            }
+            auto block=Block::tryGetFromRegistry(tag);
+            return block && !isDisallowed(*block) ? *block : current;
+        };
+        return result;
+    }
     if (trim(text).empty()) {
         error = tr("pattern.empty");
         return std::nullopt;
     }
-    std::vector<Block const*> blocks;
+    std::vector<Pattern> choices;
     std::vector<double>       weights;
     double                    assigned   = 0;
     size_t                    unweighted = 0;
@@ -238,13 +285,17 @@ std::optional<Pattern> Pattern::parse(std::string_view text, Player const& playe
         } else {
             ++unweighted;
         }
-        auto* block = parseBlock(entry, player, error);
-        if (!block) return std::nullopt;
-        if (isDisallowed(*block)) {
-            error = tr("pattern.disallowed", block->getTypeName());
-            return std::nullopt;
+        if(entry.starts_with('#') || entry.starts_with('^')) {
+            if(entry==text) {error=tr("pattern.bad_syntax",text);return std::nullopt;}
+            auto child=parse(entry,player,error);
+            if(!child) return std::nullopt;
+            choices.push_back(std::move(*child));
+        } else {
+            auto* block=parseBlock(entry,player,error);
+            if(!block) return std::nullopt;
+            if(isDisallowed(*block)) {error=tr("pattern.disallowed",block->getTypeName());return std::nullopt;}
+            choices.push_back(single(*block));
         }
-        blocks.push_back(block);
         weights.push_back(weight);
     }
 
@@ -253,9 +304,9 @@ std::optional<Pattern> Pattern::parse(std::string_view text, Player const& playe
     if (share <= 0) share = 1;
     Pattern pattern;
     double  total = 0;
-    for (size_t i = 0; i < blocks.size(); ++i) {
+    for (size_t i = 0; i < choices.size(); ++i) {
         total += weights[i] < 0 ? share : weights[i];
-        pattern.mBlocks.push_back(blocks[i]);
+        pattern.mChoices.push_back(std::move(choices[i]));
         pattern.mCumulative.push_back(total);
     }
     return pattern;
@@ -269,10 +320,52 @@ Pattern Pattern::single(Block const& block) {
 }
 
 bool Pattern::isAllowed() const {
-    return std::ranges::none_of(mBlocks, [](Block const* block) { return isDisallowed(*block); });
+    if(mClipboard) for(size_t i=0;i<mClipboard->volume();++i) {
+        auto block=mClipboard->at(i).block;
+        if(block && isDisallowed(*block)) return false;
+    }
+    return std::ranges::none_of(mBlocks, [](Block const* block) { return isDisallowed(*block); })
+        && std::ranges::all_of(mChildren,[](Pattern const& child){return child.isAllowed();})
+        && std::ranges::all_of(mChoices,[](Pattern const& child){return child.isAllowed();});
 }
 
 Block const& Pattern::apply(std::mt19937& random) const {
+    return apply(random,{0,0,0},{{0,0,0},{0,0,0}},airBlock());
+}
+
+Block const& Pattern::apply(std::mt19937& random, core::Vec3i position, core::Box const& bounds, Block const& current, bool* preserveData, bool* skip) const {
+    if(preserveData) *preserveData=false;
+    if(skip) *skip=false;
+    if(mModify) {
+        auto const& result=mModify(current);
+        if(preserveData) *preserveData=true;
+        if(skip) *skip=&result==&current;
+        return result;
+    }
+    if(mClipboard) {
+        auto wrap=[](int n,int size){int r=n%size;return r<0 ? r+size : r;};
+        auto local=position-bounds.min;
+        local={wrap(local.x,mClipboard->size.x),wrap(local.y,mClipboard->size.y),wrap(local.z,mClipboard->size.z)};
+        auto block=mClipboard->at(mClipboard->index(local)).block;
+        if(skip) *skip=!block;
+        return block ? *block : current;
+    }
+    if(!mChildren.empty()) {
+        int p=mAxis==0 ? position.x : mAxis==1 ? position.y : position.z;
+        int low=mAxis==0 ? bounds.min.x : mAxis==1 ? bounds.min.y : bounds.min.z;
+        int high=mAxis==0 ? bounds.max.x : mAxis==1 ? bounds.max.y : bounds.max.z;
+        double t=high==low ? 0 : std::clamp(double(p-low)/(high-low),0.0,1.0);
+        double stage=t*double(mChildren.size()-1);
+        size_t index=size_t(stage);
+        if(index+1<mChildren.size() && std::uniform_real_distribution<double>(0,1)(random)<stage-double(index)) ++index;
+        return mChildren[index].apply(random,position,bounds,current,preserveData,skip);
+    }
+    if(!mChoices.empty()) {
+        if(mChoices.size()==1) return mChoices.front().apply(random,position,bounds,current,preserveData,skip);
+        double roll=std::uniform_real_distribution<double>(0,mCumulative.back())(random);
+        auto it=std::ranges::upper_bound(mCumulative,roll);
+        return mChoices[std::min<size_t>(it-mCumulative.begin(),mChoices.size()-1)].apply(random,position,bounds,current,preserveData,skip);
+    }
     if (mBlocks.size() == 1) return *mBlocks.front();
     double roll = std::uniform_real_distribution<double>(0, mCumulative.back())(random);
     auto   it   = std::ranges::upper_bound(mCumulative, roll);
@@ -283,54 +376,98 @@ std::optional<Mask> Mask::parse(std::string_view text, Player const& player, std
     Mask mask;
     for (auto token : splitTokens(text)) {
         Term term;
-        if (token.starts_with('!')) {
-            term.negate = true;
-            token.remove_prefix(1);
-        }
-        if (token.starts_with('#')) {
-            if (token == "#existing") term.kind = Kind::existing;
-            else if (token == "#solid") term.kind = Kind::solid;
-            else if (token == "#air") term.kind = Kind::air;
-            else {
-                error = tr("mask.unknown", token);
-                return std::nullopt;
+        if (token.starts_with('!')) { term.negate=true; token.remove_prefix(1); }
+        if(token.empty()) {error=tr("mask.empty");return std::nullopt;}
+        if(token.starts_with('>') || token.starts_with('<')) {
+            term.kind=token.front()=='>' ? Kind::above : Kind::below;
+            auto adjacent=parse(token.substr(1),player,error);
+            if(!adjacent) return std::nullopt;
+            term.adjacent=std::make_shared<Mask>(std::move(*adjacent));
+        } else if(token.starts_with('%')) {
+            term.kind=Kind::chance;
+            auto number=token.substr(1);
+            auto [end,ec]=std::from_chars(number.data(),number.data()+number.size(),term.chance);
+            if(ec!=std::errc{} || end!=number.data()+number.size() || !std::isfinite(term.chance) || term.chance<0 || term.chance>100) {
+                error=tr("mask.bad_chance",token);return std::nullopt;
             }
+        } else if(token.starts_with('$')) {
+            term.kind=Kind::biome;
+            term.value=std::string(token.substr(1));
+            if(term.value.empty()) {
+                auto p=player.getFeetBlockPos();
+                term.value=player.getDimensionBlockSource().getBiome(p).mHash->getString();
+            }
+            term.value=normalizeName(term.value);
+        } else if(token.starts_with("#tag:")) {
+            term.kind=Kind::tag;
+            term.value=std::string(token.substr(5));
+            if(term.value.empty()) {error=tr("mask.unknown",token);return std::nullopt;}
+        } else if(token.starts_with('#')) {
+            if(token=="#existing") term.kind=Kind::existing;
+            else if(token=="#solid") term.kind=Kind::solid;
+            else if(token=="#air") term.kind=Kind::air;
+            else if(token=="#surface") term.kind=Kind::surface;
+            else {error=tr("mask.unknown",token);return std::nullopt;}
         } else {
-            for (auto entry : splitTopLevel(token, [](char c) { return c == ','; })) {
-                auto parsed = parseBlockSpec(entry, player, error);
-                if (!parsed.block) return std::nullopt;
-                term.matchers.push_back({parsed.block->getTypeName(), parsed.hasState ? parsed.block : nullptr});
+            for(auto entry:splitTopLevel(token,[](char c){return c==',';})) {
+                auto parsed=parseBlockSpec(entry,player,error);
+                if(!parsed.block) return std::nullopt;
+                term.matchers.push_back({parsed.block->getTypeName(),parsed.hasState ? parsed.block : nullptr});
             }
         }
         mask.mTerms.push_back(std::move(term));
     }
-    if (mask.mTerms.empty()) {
-        error = tr("mask.empty");
-        return std::nullopt;
-    }
+    if(mask.mTerms.empty()) {error=tr("mask.empty");return std::nullopt;}
     return mask;
 }
 
-bool Mask::test(Block const& block) const {
-    for (auto const& term : mTerms) {
-        bool matched = false;
-        switch (term.kind) {
-        case Kind::existing:
-            matched = !block.isAir();
+bool Mask::needsNeighbors() const {
+    return std::ranges::any_of(mTerms,[](Term const& term) {
+        return term.kind==Kind::surface || (term.adjacent && term.adjacent->needsNeighbors());
+    });
+}
+
+bool Mask::test(Block const& block) const { return testAt(block,nullptr,{0,0,0}); }
+bool Mask::test(Block const& block, BlockSource& region, core::Vec3i position) const { return testAt(block,&region,position); }
+
+bool Mask::testAt(Block const& block, BlockSource* region, core::Vec3i p) const {
+    for(auto const& term:mTerms) {
+        bool matched=false;
+        switch(term.kind) {
+        case Kind::existing: matched=!block.isAir(); break;
+        case Kind::solid: matched=block._isSolid(); break;
+        case Kind::air: matched=block.isAir(); break;
+        case Kind::tag: matched=block.hasTag(HashedString(term.value)); break;
+        case Kind::chance: {
+            static thread_local std::mt19937 random{std::random_device{}()};
+            matched=std::uniform_real_distribution<double>(0,100)(random)<term.chance;
             break;
-        case Kind::solid:
-            matched = block._isSolid();
+        }
+        case Kind::biome:
+            matched=region && normalizeName(region->getBiome({p.x,p.y,p.z}).mHash->getString())==term.value;
             break;
-        case Kind::air:
-            matched = block.isAir();
+        case Kind::above:
+        case Kind::below:
+            if(region) {
+                auto adjacent=p+core::Vec3i{0,term.kind==Kind::above ? -1 : 1,0};
+                matched=term.adjacent->test(region->getBlock({adjacent.x,adjacent.y,adjacent.z}),*region,adjacent);
+            }
+            break;
+        case Kind::surface:
+            if(region && !block.isAir()) {
+                for(auto offset:{core::Vec3i{1,0,0},core::Vec3i{-1,0,0},core::Vec3i{0,1,0},core::Vec3i{0,-1,0},core::Vec3i{0,0,1},core::Vec3i{0,0,-1}}) {
+                    auto q=p+offset;
+                    if(region->getBlock({q.x,q.y,q.z}).isAir()) {matched=true;break;}
+                }
+            }
             break;
         case Kind::blocks:
-            matched = std::ranges::any_of(term.matchers, [&](Matcher const& matcher) {
-                return matcher.exact ? matcher.exact == &block : matcher.typeName == block.getTypeName();
+            matched=std::ranges::any_of(term.matchers,[&](Matcher const& matcher){
+                return matcher.exact ? matcher.exact==&block : matcher.typeName==block.getTypeName();
             });
             break;
         }
-        if (matched == term.negate) return false;
+        if(matched==term.negate) return false;
     }
     return true;
 }

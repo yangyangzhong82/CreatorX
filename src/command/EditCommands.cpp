@@ -82,7 +82,8 @@ struct SimpleEditParams {
 
 namespace {
 
-constexpr std::array<std::string_view, 14> commandNames{
+constexpr std::array<std::string_view, 15> commandNames{
+    "gmask",
     "set",
     "replace",
     "walls",
@@ -228,6 +229,26 @@ void registerEditCommand(ll::command::CommandHandle& handle, std::string_view na
     using Origin = CommandOrigin const&;
     using Output = CommandOutput&;
 
+    if(name=="gmask") {
+        subOverload<OptionalPatternParams>(handle,name,subcommand).optional("pattern").execute([](Origin origin,Output output,OptionalPatternParams const& args) {
+            auto* player=getCommandPlayer(origin,output);
+            if(!player) return;
+            auto& session=getSession(*player);
+            std::string text=args.pattern ? args.pattern->mText : "";
+            if(text.find_first_not_of(" \t")==std::string::npos || text=="off") {
+                session.globalMask.reset(); session.globalMaskText.clear();
+                output.success(tr("mask.global_cleared"));
+            } else {
+                std::string error;
+                auto mask=edit::Mask::parse(text,*player,error);
+                if(!mask) {output.error(error);return;}
+                session.globalMask=std::move(mask); session.globalMaskText=text;
+                output.success(tr("mask.global_set",text));
+            }
+            saveSession(player->getUuid());
+        });
+        return;
+    }
     if (name == "set") {
         subOverload<BlockParams>(handle, name, subcommand)
             .required("block")

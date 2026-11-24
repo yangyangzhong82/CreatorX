@@ -18,6 +18,7 @@ core::CuboidSelection* completeSelection(Player& player, Feedback const& output)
 
 // 把选区设为指定包围盒（粘贴 -s 使用）。
 void selectBox(Player& player, core::Box const& box);
+void selectRegion(Player& player, core::CuboidSelection const& selection);
 
 // 以下操作供命令与表单共用，返回是否成功。
 bool setCorner(Player& player, bool first, core::Vec3i pos, Feedback const& output);

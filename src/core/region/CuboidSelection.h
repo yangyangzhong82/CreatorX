@@ -7,10 +7,13 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <vector>
+#include <array>
 
 namespace creatorx::core {
 
 enum class Direction { me, north, south, east, west, up, down };
+enum class SelectionType { cuboid, poly, ellipsoid, sphere, cyl, convex };
 
 struct CuboidSize {
     std::uint64_t x, y, z;
@@ -22,21 +25,37 @@ struct CuboidSize {
 struct CuboidSelection {
     std::optional<Vec3i> first;
     std::optional<Vec3i> second;
+    SelectionType type = SelectionType::cuboid;
+    std::vector<Vec3i> points;
+    Vec3i radii{};
+    std::optional<std::pair<int,int>> height;
+    // 凸包三角面，保存顶点索引供包含判断和轮廓共用。
+    std::vector<std::array<size_t, 3>> faces;
+
+    void setPoint(bool primary, Vec3i point);
+    void rebuildHull();
+    bool complete() const;
+    bool contains(Vec3i point) const;
+    void shift(Vec3i offset);
+    std::optional<Box> bounds() const;
 
     std::optional<CuboidSize> size() const {
-        if (!first || !second) return std::nullopt;
+        auto bounds = this->bounds();
+        if (!bounds) return std::nullopt;
         auto extent = [](int a, int b) -> std::uint64_t {
             return static_cast<std::int64_t>(std::max(a, b)) - std::min(a, b) + 1;
         };
-        return CuboidSize{extent(first->x, second->x), extent(first->y, second->y), extent(first->z, second->z)};
+        return CuboidSize{extent(bounds->min.x, bounds->max.x), extent(bounds->min.y, bounds->max.y), extent(bounds->min.z, bounds->max.z)};
     }
 
     std::optional<Box> box() const {
-        if (!first || !second) return std::nullopt;
-        return Box::of(*first, *second);
+        auto result = bounds();
+        if (result && type != SelectionType::cuboid) result->region = [selection = *this](Vec3i p) { return selection.contains(p); };
+        return result;
     }
 
     bool resize(Direction direction, int amount, int reverseAmount, bool contract) {
+        if(type != SelectionType::cuboid) return false;
         int Vec3i::* axis;
         switch (direction) {
         case Direction::east:
@@ -82,6 +101,10 @@ struct CuboidSelection {
     }
 
     void expandVertical(int minY, int maxY) {
+        if (type == SelectionType::poly || type == SelectionType::cyl) {
+            height=std::pair{minY,maxY};
+            return;
+        }
         bool ordered = first->y <= second->y;
         first->y     = ordered ? minY : maxY;
         second->y    = ordered ? maxY : minY;

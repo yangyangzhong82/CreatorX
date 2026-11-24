@@ -38,6 +38,11 @@ PlayerSession& getSession(Player const& player) {
     auto& session = getSession(player.getUuid());
     if (!session.brushBindingsRestored) {
         session.brushBindingsRestored = true;
+        if(!session.globalMaskText.empty()) {
+            std::string error;
+            session.globalMask=edit::Mask::parse(session.globalMaskText,player,error);
+            if(!session.globalMask) { logger.warn(tr("storage.failed",error)); session.globalMaskText.clear(); }
+        }
         for (auto it = session.brushBindings.begin(); it != session.brushBindings.end();) {
             auto& binding = it->second;
             bool valid = true;
@@ -79,6 +84,7 @@ PlayerSession& getSession(mce::UUID const& uuid) {
                 auto tag = storage::readNbt(path);
                 it->second.history.deserialize(tag["history"].get<CompoundTag>());
                 it->second.wandEnabled = bool(tag["wand"]);
+                if(tag.contains("global_mask",Tag::String)) it->second.globalMaskText=std::string(tag["global_mask"]);
                 if (tag.contains("remote_wand", Tag::Byte)) it->second.remoteWand = bool(tag["remote_wand"]);
                 it->second.showOutline = bool(tag["outline"]);
                 if (tag.contains("hud", Tag::Byte)) it->second.showHud = bool(tag["hud"]);
@@ -143,6 +149,7 @@ void saveSession(mce::UUID const& uuid) {
         CompoundTag tag;
         tag["history"] = session->history.serialize();
         tag["wand"] = session->wandEnabled;
+        tag["global_mask"] = session->globalMaskText;
         tag["remote_wand"] = session->remoteWand;
         tag["outline"] = session->showOutline;
         tag["hud"] = session->showHud;

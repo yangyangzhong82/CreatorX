@@ -1,6 +1,7 @@
 #include "visual/PastePreview.h"
 #include "visual/SelectionOutline.h"
 #include "edit/Pattern.h"
+#include "session/PlayerSession.h"
 #include "mod/Global.h"
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/world/ServerLevelTickEvent.h"
@@ -63,8 +64,10 @@ void showPastePreview(Player& player, PastePlacement placement) {
     if(clipboard.volume()<=config.visual.previewMaxBlocks) for(int y=0;y<clipboard.size.y;++y) for(int z=0;z<clipboard.size.z;++z) for(int x=0;x<clipboard.size.x;++x) {
         auto cell=clipboard.at(clipboard.index({x,y,z}));
         if(!cell.block || (preview.placement.skipAir && cell.block->isAir()) || edit::isDisallowed(*cell.block)) continue;
-        if(preview.placement.mask && !preview.placement.mask->test(*cell.block)) continue;
         auto p=min+core::Vec3i{x,y,z};
+        if(preview.placement.mask && !preview.placement.mask->test(*cell.block,region,p)) continue;
+        auto const& global=getSession(player).globalMask;
+        if(global && !global->test(region.getBlock({p.x,p.y,p.z}),region,p)) continue;
         if (!region.getChunkAt({p.x, p.y, p.z})) continue;
         preview.positions.push_back(p);
         send(player,p,*cell.block,0);

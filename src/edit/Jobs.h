@@ -51,7 +51,7 @@ std::unique_ptr<exec::Job> makeTerrainBrush(
 std::unique_ptr<exec::Job> makeHistory(mce::UUID owner, bool undo, std::vector<ChangeSet> sets, mce::UUID requester);
 
 using EditFilter = std::function<bool(BlockSource&, core::Vec3i)>;
-std::unique_ptr<exec::Job> makeComputedEdit(mce::UUID owner, int dimension, core::Box box, Pattern pattern, EditFilter filter, std::string label);
+std::unique_ptr<exec::Job> makeComputedEdit(mce::UUID owner, int dimension, core::Box box, Pattern pattern, EditFilter filter, std::string label, bool neighbors = false);
 std::unique_ptr<exec::Job> makeInspect(mce::UUID owner, int dimension, core::Box box, std::optional<Mask> mask);
 std::unique_ptr<exec::Job> makeClipboardInspect(mce::UUID owner,std::shared_ptr<Clipboard const> clipboard);
 std::unique_ptr<exec::Job> makeTransfer(

@@ -31,6 +31,7 @@
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/phys/HitResult.h"
 
+#include <magic_enum.hpp>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -38,6 +39,8 @@
 #include <string_view>
 
 namespace creatorx {
+
+struct SelectionTypeParams { core::SelectionType type; };
 
 struct PositionParams {
     ll::command::Optional<CommandPosition> position;
@@ -67,8 +70,8 @@ struct AmountParams {
 
 namespace {
 
-constexpr std::array<std::string_view, 13> commandNames{
-    "pos1", "pos2", "hpos1", "hpos2", "size", "desel", "wand", "togglewand", "expand", "contract", "shift", "outset", "inset"
+constexpr std::array<std::string_view, 15> commandNames{
+    "sel", "chunk", "pos1", "pos2", "hpos1", "hpos2", "size", "desel", "wand", "togglewand", "expand", "contract", "shift", "outset", "inset"
 };
 constexpr auto         wandTag = "creatorx:selection_wand";
 ll::event::ListenerPtr registerListener;
@@ -104,6 +107,10 @@ bool commitResize(
     core::CuboidSelection&       selection,
     core::CuboidSelection const& candidate
 ) {
+    if (candidate.type != core::SelectionType::cuboid && candidate.type != core::SelectionType::poly && candidate.type != core::SelectionType::cyl) {
+        output.error(tr("selection.cuboid_resize"));
+        return false;
+    }
     if (!candidate.size()->fits(config.limits.maxSelectionVolume)) {
         output.error(tr("selection.too_large", config.limits.maxSelectionVolume));
         return false;
@@ -209,6 +216,34 @@ void registerResizeCommand(ll::command::CommandHandle& handle, std::string_view 
 }
 
 void registerSelectionCommand(ll::command::CommandHandle& handle, std::string_view name, bool subcommand) {
+    if (name == "sel") {
+        auto overload = handle.overload<SelectionTypeParams>();
+        if (subcommand) (void)overload.text(name);
+        overload.required("type").execute([](CommandOrigin const& origin, CommandOutput& output, SelectionTypeParams const& args) {
+            if (auto* player = getCommandPlayer(origin, output)) {
+                clearSelectionOutline(*player);
+                auto& session=getSession(*player);
+                session.cuboid={};
+                session.cuboid.type=args.type;
+                session.dimension=player->getDimensionId();
+                output.success(tr("selection.mode", magic_enum::enum_name(args.type)));
+            }
+        });
+        return;
+    }
+    if (name == "chunk") {
+        auto overload=handle.overload();
+        if(subcommand) (void)overload.text(name);
+        overload.execute([](CommandOrigin const& origin, CommandOutput& output) {
+            if(auto* player=getCommandPlayer(origin,output)) {
+                auto pos=player->getFeetBlockPos();
+                auto const& height=*player->getDimension().mHeightRange;
+                int x=(pos.x>>4)*16,z=(pos.z>>4)*16;
+                setSelection(*player,{x,height.mMin,z},{x+15,int(height.mMax)-1,z+15},output);
+            }
+        });
+        return;
+    }
     if (name == "expand" || name == "contract") {
         registerResizeCommand(handle, name, subcommand);
         return;
@@ -329,13 +364,21 @@ core::CuboidSelection* completeSelection(Player& player, Feedback const& output)
         output.error(tr("selection.missing_corner", selection.first ? 2 : 1));
         return nullptr;
     }
+    if (!selection.complete()) {
+        output.error(tr("selection.need_vertices"));
+        return nullptr;
+    }
     return &selection;
 }
 
 void selectBox(Player& player, core::Box const& box) {
+    selectRegion(player,{box.min,box.max});
+}
+
+void selectRegion(Player& player, core::CuboidSelection const& selection) {
     auto& session     = getSession(player);
     session.dimension = player.getDimensionId();
-    session.cuboid    = {box.min, box.max};
+    session.cuboid    = selection;
     refreshOutline(player, session);
 }
 
@@ -343,7 +386,8 @@ bool setCorner(Player& player, bool first, core::Vec3i pos, Feedback const& outp
     int   dimension = player.getDimensionId();
     auto& session   = getSession(player);
     auto  candidate = session.dimension == dimension ? session.cuboid : core::CuboidSelection{};
-    (first ? candidate.first : candidate.second) = pos;
+    candidate.type=session.cuboid.type;
+    candidate.setPoint(first, pos);
     auto size                                    = candidate.size();
     if (size && !size->fits(config.limits.maxSelectionVolume)) {
         output.error(tr("selection.too_large", config.limits.maxSelectionVolume));
@@ -381,9 +425,11 @@ bool setSelection(Player& player, core::Vec3i first, core::Vec3i second, Feedbac
 
 void showSize(core::CuboidSelection const& selection, Feedback const& output) {
     auto size = *selection.size();
-    auto a    = *selection.first;
-    auto b    = *selection.second;
+    auto bounds=*selection.box();
+    auto a    = bounds.min;
+    auto b    = bounds.max;
     output.success(tr("selection.size", a.x, a.y, a.z, b.x, b.y, b.z, size.x, size.y, size.z, size.volume()));
+    if(selection.type!=core::SelectionType::cuboid) output.success(tr("selection.shape_info",magic_enum::enum_name(selection.type),selection.points.size()));
 }
 
 bool resizeSelection(
@@ -401,6 +447,10 @@ bool resizeSelection(
         return false;
     }
     if (direction == core::Direction::me) direction = facingDirection(player);
+    if (selection->type != core::SelectionType::cuboid) {
+        output.error(tr("selection.cuboid_resize"));
+        return false;
+    }
     auto candidate = *selection;
     if (!candidate.resize(direction, amount, reverseAmount, contract)) {
         output.error(tr(contract ? "selection.contract_empty" : "selection.expand_range"));
@@ -412,6 +462,11 @@ bool resizeSelection(
 bool expandVertically(Player& player, Feedback const& output) {
     auto* selection = completeSelection(player, output);
     if (!selection) return false;
+    if (selection->type != core::SelectionType::cuboid && selection->type != core::SelectionType::poly
+        && selection->type != core::SelectionType::cyl) {
+        output.error(tr("selection.cuboid_resize"));
+        return false;
+    }
     auto const& range     = *player.getDimension().mHeightRange;
     auto        candidate = *selection;
     candidate.expandVertical(range.mMin, int(range.mMax) - 1);
@@ -436,14 +491,14 @@ bool shiftSelection(Player& player, Feedback const& output, int amount, core::Di
     case core::Direction::me: return false;
     }
     auto candidate = *selection;
-    for(auto point:{*candidate.first,*candidate.second}) {
+    auto bounds=*candidate.box();
+    for(auto point:{bounds.min,bounds.max}) {
         for(auto [coordinate,offset]:{std::pair{point.x,delta.x},std::pair{point.y,delta.y},std::pair{point.z,delta.z}}) {
             auto moved=std::int64_t(coordinate)+offset;
             if(moved<std::numeric_limits<int>::min() || moved>std::numeric_limits<int>::max()) {output.error(tr("selection.expand_range"));return false;}
         }
     }
-    candidate.first = *candidate.first + delta;
-    candidate.second = *candidate.second + delta;
+    candidate.shift(delta);
     if (!candidate.size()->fits(config.limits.maxSelectionVolume)) {
         output.error(tr("selection.too_large", config.limits.maxSelectionVolume));
         return false;
@@ -460,6 +515,7 @@ bool outsetSelection(Player& player, Feedback const& output, int amount, bool ho
         output.error(tr("selection.resize_amount"));
         return false;
     }
+    if(selection->type!=core::SelectionType::cuboid) {output.error(tr("selection.cuboid_resize"));return false;}
     auto candidate = *selection;
     if (horizontal) {
         if (!candidate.resize(core::Direction::east, amount, amount, false)
@@ -481,6 +537,7 @@ bool insetSelection(Player& player, Feedback const& output, int amount) {
         output.error(tr("selection.resize_amount"));
         return false;
     }
+    if(selection->type!=core::SelectionType::cuboid) {output.error(tr("selection.cuboid_resize"));return false;}
     auto candidate = *selection;
     if (!candidate.resize(core::Direction::east, amount, amount, true)
         || !candidate.resize(core::Direction::south, amount, amount, true)
@@ -494,7 +551,9 @@ bool insetSelection(Player& player, Feedback const& output, int amount) {
 void clearSelection(Player& player, Feedback const& output) {
     clearSelectionOutline(player);
     if (auto* session = findSession(player.getUuid())) {
+        auto type=session->cuboid.type;
         session->cuboid = {};
+        session->cuboid.type=type;
         session->lastLeftClick.reset();
     }
     output.success(tr("selection.cleared"));

@@ -1,15 +1,21 @@
 #pragma once
 
+#include "core/region/Box.h"
+
 #include <optional>
 #include <random>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <functional>
+#include <memory>
 
 class Block;
 class Player;
+class BlockSource;
 
 namespace creatorx::edit {
+struct Clipboard;
 
 Block const& airBlock();
 
@@ -29,11 +35,17 @@ public:
     static Pattern                single(Block const& block);
 
     Block const& apply(std::mt19937& random) const;
+    Block const& apply(std::mt19937& random, core::Vec3i position, core::Box const& bounds, Block const& current, bool* preserveData = nullptr, bool* skip = nullptr) const;
     bool         isAllowed() const;
 
 private:
     std::vector<Block const*> mBlocks;
     std::vector<double>       mCumulative;
+    std::vector<Pattern>      mChildren;
+    std::vector<Pattern>      mChoices;
+    int                       mAxis = 1;
+    std::shared_ptr<Clipboard const> mClipboard;
+    std::function<Block const&(Block const&)> mModify;
 };
 
 // 掩码：`stone,dirt`、`!air`、`#existing`、`#solid`、`#air`，空格分隔表示交集。
@@ -42,9 +54,11 @@ public:
     static std::optional<Mask> parse(std::string_view text, Player const& player, std::string& error);
 
     bool test(Block const& block) const;
+    bool test(Block const& block, BlockSource& region, core::Vec3i position) const;
+    bool needsNeighbors() const;
 
 private:
-    enum class Kind { blocks, existing, solid, air };
+    enum class Kind { blocks, existing, solid, air, surface, chance, biome, tag, above, below };
     struct Matcher {
         std::string  typeName;
         Block const* exact = nullptr; // 写了状态时按完整方块比较
@@ -53,8 +67,12 @@ private:
         Kind                 kind   = Kind::blocks;
         bool                 negate = false;
         std::vector<Matcher> matchers;
+        std::string          value;
+        double               chance = 100;
+        std::shared_ptr<Mask> adjacent;
     };
     std::vector<Term> mTerms;
+    bool testAt(Block const& block, BlockSource* region, core::Vec3i position) const;
 };
 
 // 按空白切分，方括号和引号内的空白保留。
